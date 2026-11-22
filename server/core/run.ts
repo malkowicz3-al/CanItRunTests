@@ -36,6 +36,7 @@ export async function runRequest(input: RunInput, send: Send = execute): Promise
   const request = template(p.item);
   const preScripts: ScriptResult[] = [];
   for (const code of p.pre) {
+    if (input.signal?.aborted) return { finalRequest: finalize(p, request, scopes), redirects: [], error: { code: 'ECANCELED', message: 'Cancelled' }, preScripts, testScripts: [], scopes, nextRequest: nextOf(preScripts) };
     const res = await runScript(code, { scopes, request, requestName, send: scriptSend });
     preScripts.push(res);
     if (res.error) {
@@ -48,6 +49,7 @@ export async function runRequest(input: RunInput, send: Send = execute): Promise
   const testScripts: ScriptResult[] = [];
   if (http.response) {
     for (const code of p.test) {
+      if (input.signal?.aborted) break;
       testScripts.push(await runScript(code, { scopes, request: { ...http.finalRequest, headers: { ...http.finalRequest.headers } }, response: http.response, requestName, send: scriptSend }));
     }
   }

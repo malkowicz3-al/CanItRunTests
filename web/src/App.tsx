@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActionIcon, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
+import { ActionIcon, Drawer, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
 import type { Collection, Environment, Globals, Id } from '../../shared/model';
 import { api } from './api';
 import { EnvironmentsView } from './components/EnvironmentEditor';
 import { ImportDialog } from './components/ImportDialog';
-import { Library } from './components/Library';
+import { FlowsScreen } from './components/Flows';
 import { RequestsScreen } from './components/Requests';
-import { TrackScreen } from './components/Track';
 import { Icons } from './components/ui';
 import { AppContext, notifyError, SCREENS, type AppData, type Screen } from './context';
-import { createRunLock, loadTrack, saveTrack, type Track } from './track';
-import { itemIds, uid } from './util';
+import { createRunLock } from './track';
+import { itemIds } from './util';
 
 const ENV_KEY = 'cirt.activeEnvironment';
 // localStorage throws in some privacy modes; the selection is just not remembered then
@@ -19,13 +18,12 @@ const writeEnvId = (id: string | null) => { try { if (id) localStorage.setItem(E
 const SCREEN_KEY = 'cirt.screen';
 const readScreen = (): Screen => { try { return SCREENS.find((s) => s === localStorage.getItem(SCREEN_KEY)) ?? 'requests'; } catch { return 'requests'; } };
 
-function RailButton({ label, icon, active, disabled, onClick }: { label: string; icon: ReactNode; active?: boolean; disabled?: boolean; onClick?: () => void }) {
+function RailButton({ label, icon, active, onClick }: { label: string; icon: ReactNode; active?: boolean; onClick: () => void }) {
   return (
     <Tooltip label={label} position="right" openDelay={200}>
-      {/* data-disabled instead of disabled: a disabled button gets no hover, so the tooltip would never show */}
       <ActionIcon
-        variant="subtle" color="gray" size={40} className="rail-button" data-active={active || undefined} data-disabled={disabled || undefined}
-        aria-label={label} aria-current={active ? 'page' : undefined} aria-disabled={disabled || undefined} onClick={disabled ? undefined : onClick}
+        variant="subtle" color="gray" size={40} className="rail-button" data-active={active || undefined}
+        aria-label={label} aria-current={active ? 'page' : undefined} onClick={onClick}
       >{icon}</ActionIcon>
     </Tooltip>
   );
@@ -38,15 +36,16 @@ export function App() {
   const [activeEnvId, setActiveEnv] = useState<Id | null>(readEnvId);
   const [screen, setScreen] = useState<Screen>(readScreen);
   const [envSelection, setEnvSelection] = useState<string | null>(null);
+  const [envOpen, setEnvOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
   const [importOpen, setImportOpen] = useState(false);
-  const [track, setTrackState] = useState<Track>(loadTrack);
   const [busy, setBusy] = useState(false);
   const [runLock] = useState(() => createRunLock(setBusy));
   const latestCollections = useRef(collections);
   latestCollections.current = collections;
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const forgetters = useRef(new Set<(ids: Id[]) => void>());
+  const addToFlow = useRef<(collectionId: Id, requestId: Id) => void>(() => {}); // set by the Flows screen, which owns the open flow
   const { setColorScheme } = useMantineColorScheme();
   const scheme = useComputedColorScheme('dark');
 
@@ -70,7 +69,6 @@ export function App() {
   }, []);
   const reload = useCallback(() => enqueue(load), [enqueue, load]); // never call reload from inside an enqueued step: it would wait for itself
   useEffect(() => { reload().catch(notifyError); }, [reload]);
-  useEffect(() => saveTrack(track), [track]);
   useEffect(() => { try { localStorage.setItem(SCREEN_KEY, screen); } catch { /* not persisted */ } }, [screen]);
 
   const hasDrafts = Object.keys(drafts).length > 0;
@@ -92,9 +90,8 @@ export function App() {
     collections, environments, globals, drafts, setDraft, discardDraft, screen, setScreen, envSelection,
     activeEnvId,
     setActiveEnvId: (id) => { setActiveEnv(id); writeEnvId(id); },
-    editEnvironment: (id) => { setEnvSelection(id); if (id) setScreen('environments'); },
-    addStation: (collectionId, requestId) => setTrackState((t) => ({ ...t, stations: [...t.stations, { id: uid(), collectionId, requestId }] })),
-    dropStations: (ids) => setTrackState((t) => ({ ...t, stations: t.stations.filter((s) => !ids.includes(s.requestId)) })),
+    editEnvironment: (id) => { setEnvSelection(id); if (id) setEnvOpen(true); },
+    addToFlow: (collectionId, requestId) => addToFlow.current(collectionId, requestId),
     reload,
     refreshAfterRun: (collectionId) => enqueue(async () => {
       const [c, envs, g] = await Promise.all([api.getCollection(collectionId), api.listEnvironments(), api.getGlobals()]);
@@ -111,6 +108,7 @@ export function App() {
       putCollection(saved);
     }),
     deleteCollection: (id) => enqueue(async () => { await api.deleteCollection(id); await load(); }),
+    enqueue,
     saveEnvironment: async (e) => {
       const saved = await api.saveEnvironment(e);
       setEnvironments((es) => es.map((x) => (x.id === saved.id ? saved : x)).sort(byName));
@@ -129,11 +127,8 @@ export function App() {
     <AppContext.Provider value={ctx}>
       <div className="app">
         <nav className="rail" aria-label="Main">
-          <RailButton label="Requests" icon={Icons.requests()} active={screen === 'requests'} onClick={() => setScreen('requests')} />
-          <RailButton label="Flows" icon={Icons.track()} active={screen === 'track'} onClick={() => setScreen('track')} />
-          <RailButton label="Library" icon={Icons.library()} active={screen === 'library'} onClick={() => setScreen('library')} />
-          <RailButton label="Environments" icon={Icons.layers()} active={screen === 'environments'} onClick={() => setScreen('environments')} />
-          <RailButton label="Load tests: Stage 3" icon={Icons.bolt()} disabled />
+          <RailButton label="Endpoints" icon={Icons.requests()} active={screen === 'requests'} onClick={() => setScreen('requests')} />
+          <RailButton label="Flows" icon={Icons.track()} active={screen === 'flows'} onClick={() => setScreen('flows')} />
           <div style={{ flex: 1 }} />
           <RailButton label={scheme === 'dark' ? 'Light theme' : 'Dark theme'} icon={scheme === 'dark' ? Icons.sun() : Icons.moon()} onClick={() => setColorScheme(scheme === 'dark' ? 'light' : 'dark')} />
         </nav>
@@ -142,13 +137,17 @@ export function App() {
           <div style={{ display: screen === 'requests' ? 'contents' : 'none' }}>
             <RequestsScreen active={screen === 'requests'} />
           </div>
-          <div style={{ display: screen === 'track' ? 'contents' : 'none' }}>
-            <TrackScreen track={track} setTrack={setTrackState} active={screen === 'track'} />
+          <div style={{ display: screen === 'flows' ? 'contents' : 'none' }}>
+            <FlowsScreen active={screen === 'flows'} addToFlow={addToFlow} />
           </div>
-          {screen === 'library' && <Library mode="full" />}
-          {screen === 'environments' && <EnvironmentsView />}
         </main>
       </div>
+      <Drawer
+        opened={envOpen} onClose={() => setEnvOpen(false)} position="right" size="80%" title="Environments"
+        styles={{ content: { display: 'flex', flexDirection: 'column' }, body: { flex: 1, minHeight: 0, padding: 0 } }}
+      >
+        <EnvironmentsView />
+      </Drawer>
       <ImportDialog opened={importOpen} onClose={() => setImportOpen(false)} />
     </AppContext.Provider>
   );

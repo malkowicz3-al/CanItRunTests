@@ -11,7 +11,8 @@ import '@fontsource/jetbrains-mono/latin-400.css';
 import '@fontsource/jetbrains-mono/latin-ext-400.css';
 import '@fontsource/jetbrains-mono/latin-500.css';
 import '@fontsource/jetbrains-mono/latin-ext-500.css';
-import './app.css';
+import '@xyflow/react/dist/style.css';
+import './app.css'; // after React Flow's CSS, so the --xy-* overrides win
 import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import {

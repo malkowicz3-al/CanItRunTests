@@ -1,8 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, expect, test } from 'vitest';
+import type { WsMessage } from '../shared/api';
 import { startMockServer } from './mockServer';
 
 let server: ChildProcess;
@@ -93,4 +96,65 @@ test('dist smoke: run with jsrsasign+jose', async () => {
     { name: 'jsrsasign JWS sent', passed: true },
     { name: 'jose JWT sent', passed: true },
   ]);
+});
+
+test('dist smoke: flow run over /ws', async () => {
+  const post = (url: string, body: unknown) =>
+    fetch(baseUrl + url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const collection = {
+    info: { _postman_id: 'dist-flow', name: 'Dist flow', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
+    variable: [{ key: 'base', value: mock.http }],
+    item: [
+      { name: 'A', event: [{ listen: 'test', script: { exec: ["pm.collectionVariables.set('token', 'from-a')"] } }], request: { method: 'GET', url: '{{base}}/echo' } },
+      { name: 'B', event: [{ listen: 'test', script: { exec: ["pm.test('token passed', () => pm.expect(pm.response.json().headers['x-token']).to.equal('from-a'))"] } }],
+        request: { method: 'GET', url: '{{base}}/echo', header: [{ key: 'X-Token', value: '{{token}}' }] } },
+    ],
+  };
+  const { id: collectionId } = await (await post('/api/import', collection)).json();
+  const col = await (await fetch(`${baseUrl}/api/collections/${collectionId}`)).json();
+  const node = (id: string, requestId: string) => ({ id, type: 'request', position: { x: 0, y: 0 }, data: { collectionId, requestId, continueWhen: [] } });
+  const flow = await (await post('/api/flows', {
+    name: 'Dist flow',
+    nodes: [{ id: 'start', type: 'start', position: { x: 0, y: 0 }, data: {} }, node('a', col.items[0].id), node('b', col.items[1].id)],
+    edges: [{ id: 'e1', source: 'start', sourceHandle: 'ok', target: 'a' }, { id: 'e2', source: 'a', sourceHandle: 'ok', target: 'b' }],
+  })).json();
+
+  const ws = new WebSocket(baseUrl.replace('http', 'ws') + '/ws');
+  const messages: WsMessage[] = [];
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  const done = new Promise<void>((resolve) => {
+    ws.onmessage = (e) => {
+      messages.push(JSON.parse(String(e.data)));
+      if (messages.at(-1)!.type === 'flow.done') resolve();
+    };
+  });
+  const run = await post(`/api/flows/${flow.id}/run`, {});
+  expect(run.status).toBe(200);
+  await done;
+  ws.close();
+
+  expect(messages.at(-1)).toMatchObject({ type: 'flow.done', status: 'done' });
+  const b = messages.find((m) => m.type === 'flow.node' && m.phase === 'end' && m.nodeId === 'b');
+  expect(b).toMatchObject({ outcome: 'ok' });
+  expect(b?.type === 'flow.node' && b.phase === 'end' && b.result.testScripts[0].tests).toEqual([{ name: 'token passed', passed: true }]);
+});
+
+test('dist /ws closes a connection from a foreign Origin', async () => {
+  const { hostname, port } = new URL(baseUrl);
+  const req = http.request({ hostname, port, path: '/ws', headers: {
+    connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': randomBytes(16).toString('base64'), origin: 'http://evil.example',
+  } });
+  const frame = await new Promise<Buffer>((resolve, reject) => {
+    req.on('upgrade', (_res, socket, head) => {
+      socket.on('error', () => {}); // the server drops the socket after the close frame
+      if (head.length) return resolve(head);
+      socket.once('data', resolve);
+    });
+    req.on('response', (res) => reject(new Error(`no upgrade: ${res.statusCode}`)));
+    req.on('error', reject);
+    req.end();
+  });
+  req.destroy();
+  expect(frame[0]).toBe(0x88); // FIN + close opcode
+  expect(frame.readUInt16BE(2)).toBe(1008);
 });

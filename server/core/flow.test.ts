@@ -78,6 +78,16 @@ test('cancel returns cancelled with ECANCELED', async () => {
   expect(h.ends[0].result.error!.code).toBe('ECANCELED');
 });
 
+test('cancel without a Fail cable is cancelled, not done', async () => {
+  const started: string[] = [];
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 100);
+  const f = flow([node('A', 'a'), node('B', 'b')], [edge('s', 'ok', 'A'), edge('A', 'ok', 'B')]);
+  const out = await runFlow(input(f, [col('c', [req('a', '{{base}}/slow?ms=3000'), req('b', '{{base}}/echo')])]), { signal: ac.signal, onNodeStart: (n) => { started.push(n.id); } });
+  expect(out).toEqual({ status: 'cancelled', nodeRuns: 1 });
+  expect(started).toEqual(['A']);
+});
+
 test('setNextRequest ignored with warning', async () => {
   const h = record();
   const a = req('a', '{{base}}/echo', { test: `pm.setNextRequest('x')` });

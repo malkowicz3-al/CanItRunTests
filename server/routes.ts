@@ -9,15 +9,15 @@ import type { RunPool } from './runPool';
 import { applyDiff, type ScopeDiff } from './core/run';
 import { list, readJson, remove, updateJson, writeJson } from './storage';
 
-const badRequest = (msg: string) => Object.assign(new Error(msg), { statusCode: 400 });
-const notFound = (what: string) => Object.assign(new Error(`${what} not found`), { statusCode: 404 });
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-function objBody(x: unknown): Record<string, unknown> {
+export const badRequest = (msg: string) => Object.assign(new Error(msg), { statusCode: 400 });
+export const notFound = (what: string) => Object.assign(new Error(`${what} not found`), { statusCode: 404 });
+export const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+export function objBody(x: unknown): Record<string, unknown> {
   if (!isObj(x)) throw badRequest('Expected a JSON object body');
   return x;
 }
 
-type IdParams = { Params: { id: string } };
+export type IdParams = { Params: { id: string } };
 
 export function registerRoutes(app: FastifyInstance, pool: RunPool): void {
   // Only JSON bodies: blocks simple cross-site form posts (CSRF).

@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 import { notifications } from '@mantine/notifications';
 import type { Collection, Environment, Globals, Id } from '../../shared/model';
 
-export const SCREENS = ['requests', 'track', 'library', 'environments'] as const; // 'track' is the Flows screen
+export const SCREENS = ['requests', 'flows'] as const;
 export type Screen = (typeof SCREENS)[number];
 
 export interface AppData {
@@ -13,11 +13,11 @@ export interface AppData {
   setActiveEnvId: (id: Id | null) => void;
   screen: Screen;
   setScreen: (s: Screen) => void;
-  /** Selected row in the environments view: an environment id or 'globals'. */
+  /** Selected row in the environments drawer: an environment id or 'globals'. */
   envSelection: string | null;
-  editEnvironment: (id: string | null) => void;
-  addStation: (collectionId: Id, requestId: Id) => void;
-  dropStations: (requestIds: Id[]) => void; // after the requests were deleted
+  editEnvironment: (id: string | null) => void; // a non-null id opens the environments drawer
+  /** Adds a node to the open flow (a new "Untitled flow" when none is open). */
+  addToFlow: (collectionId: Id, requestId: Id) => void;
   /** Unsaved edits by key (request id, environment id, 'vars:<collectionId>', 'globals'). */
   drafts: Record<string, unknown>;
   setDraft: (key: string, value: unknown) => void; // undefined = discard
@@ -28,6 +28,8 @@ export interface AppData {
   /** Saves `update(latest)`: applied to the current state (saves run one after another), so concurrent edits of other parts are kept. */
   saveCollection: (id: Id, update: (latest: Collection) => Collection) => Promise<void>;
   deleteCollection: (id: Id) => Promise<void>;
+  /** Runs `fn` after every queued save, refresh and delete. */
+  enqueue: <T>(fn: () => Promise<T>) => Promise<T>;
   saveEnvironment: (e: Environment) => Promise<void>;
   saveGlobals: (g: Globals) => Promise<void>;
   openImport: () => void;

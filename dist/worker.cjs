@@ -30037,6 +30037,7 @@ async function runRequest(input, send = execute) {
   const request = template(p.item);
   const preScripts = [];
   for (const code of p.pre) {
+    if (input.signal?.aborted) return { finalRequest: finalize(p, request, scopes), redirects: [], error: { code: "ECANCELED", message: "Cancelled" }, preScripts, testScripts: [], scopes, nextRequest: nextOf(preScripts) };
     const res = await runScript(code, { scopes, request, requestName, send: scriptSend });
     preScripts.push(res);
     if (res.error) {
@@ -30047,6 +30048,7 @@ async function runRequest(input, send = execute) {
   const testScripts = [];
   if (http2.response) {
     for (const code of p.test) {
+      if (input.signal?.aborted) break;
       testScripts.push(await runScript(code, { scopes, request: { ...http2.finalRequest, headers: { ...http2.finalRequest.headers } }, response: http2.response, requestName, send: scriptSend }));
     }
   }
@@ -30089,6 +30091,7 @@ async function runFlow(input, hooks = {}, send = execute) {
     if (result2.nextRequest !== void 0) [...result2.preScripts, ...result2.testScripts].at(-1)?.logs.push({ level: "warn", text: NEXT_REQUEST_WARNING });
     const outcome = nodeOutcome(result2, continueWhen);
     hooks.onNodeEnd?.(node, result2, outcome, s);
+    if (hooks.signal?.aborted) return { status: "cancelled", nodeRuns };
     node = nextNode(flow, node.id, outcome);
   }
   return { status: "done", nodeRuns };

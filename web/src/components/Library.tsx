@@ -10,6 +10,8 @@ import { VariablesEditor } from './EnvironmentEditor';
 import { ConfirmModal, EmptyState, Icons, MethodGlyph } from './ui';
 
 export const TICKET_MIME = 'application/x-cirt-ticket';
+const COLLAPSED_KEY = 'cirt.dock.collapsed';
+const readCollapsed = (): string[] => { try { const v: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; } catch { return []; } };
 
 type Target = { collection: Collection; item?: Item }; // no item = the collection itself
 
@@ -65,7 +67,6 @@ export function useLibraryActions() {
       else await app.deleteCollection(c.id);
       for (const id of ids) if (id in app.drafts) app.setDraft(id, undefined);
       app.forgetResults(ids);
-      app.dropStations(ids);
     } catch (e) { notifyError(e); }
   };
   const newCollection = () => {
@@ -84,7 +85,7 @@ export function useLibraryActions() {
     </>
   );
   const addToFlow = (c: Collection, r: RequestItem) => {
-    app.addStation(c.id, r.id);
+    app.addToFlow(c.id, r.id);
     notifications.show({ message: `${r.name} added to the flow.` });
   };
   const requestMenu = (c: Collection, r: RequestItem) => (
@@ -109,7 +110,7 @@ export function useLibraryActions() {
       <ConfirmModal
         opened={!!del} onClose={() => setDel(null)} onConfirm={() => del && void doDelete(del)}
         title={del?.item ? `Delete ${del.item.kind}` : 'Delete collection'}
-        message={<>Delete <b>{del?.item?.name ?? del?.collection.name}</b>{del?.item?.kind === 'request' ? '' : ' and everything in it'}? Stations using it are removed from the flow. This cannot be undone.</>}
+        message={<>Delete <b>{del?.item?.name ?? del?.collection.name}</b>{del?.item?.kind === 'request' ? '' : ' and everything in it'}? Flow nodes using it show as Missing request. This cannot be undone.</>}
       />
       <Drawer opened={!!varsCollection} onClose={() => setVars(null)} position="right" size={560} withCloseButton={false} padding={0} styles={{ body: { height: '100%' } }}>
         {varsCollection && (
@@ -125,26 +126,30 @@ export function useLibraryActions() {
   return { containerMenu, requestMenu, addToFlow, newCollection, dialogs, dialogOpen };
 }
 
-/** Imported collections as tickets grouped by collection and folder. `full` adds management menus. */
-export function Library({ mode }: { mode: 'dock' | 'full' }) {
+const countRequests = (items: Item[]): number => items.reduce((n, it) => n + (it.kind === 'request' ? 1 : countRequests(it.items)), 0);
+
+/** Endpoint dock of the Flows screen: requests as tickets under collapsible collection headers, folders as indented subgroups. */
+export function EndpointDock({ onAdd }: { onAdd: (collectionId: string, requestId: string) => void }) {
   const app = useApp();
-  const actions = useLibraryActions();
-  const full = mode === 'full';
   const [filter, setFilter] = useState('');
-  const groups = libraryGroups(app.collections, filter).filter((g) => full || g.requests.length);
+  const [collapsed, setCollapsed] = useState<string[]>(readCollapsed);
+  const searching = !!filter.trim();
+  const groups = libraryGroups(app.collections, filter).filter((g) => g.requests.length);
+  const toggle = (id: string) => {
+    const next = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
+    setCollapsed(next);
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next)); } catch { /* not persisted */ }
+  };
 
   return (
-    <div className="library" data-mode={mode}>
+    <div className="library">
       <Group className="library-head" gap="sm" wrap="nowrap">
-        <Text size={full ? 'lg' : 'md'} fw={600}>Library</Text>
+        <Text size="md" fw={600}>Endpoints</Text>
         <TextInput
-          placeholder="Search by name, URL or method" leftSection={Icons.search()} value={filter} aria-label="Search library"
+          placeholder="Search by name, URL or method" leftSection={Icons.search()} value={filter} aria-label="Search endpoints"
           onChange={(e) => setFilter(e.currentTarget.value)} style={{ flex: 1, maxWidth: 360 }}
         />
-        <Group gap="xs" ml="auto" wrap="nowrap">
-          {full && <Button variant="default" leftSection={Icons.plus()} onClick={actions.newCollection}>New collection</Button>}
-          <Button variant="default" leftSection={Icons.upload()} onClick={app.openImport}>Import</Button>
-        </Group>
+        <Button variant="default" ml="auto" leftSection={Icons.upload()} onClick={app.openImport}>Import</Button>
       </Group>
       {app.collections.length === 0 ? (
         <EmptyState title="Import a Postman collection or environment.">
@@ -153,43 +158,46 @@ export function Library({ mode }: { mode: 'dock' | 'full' }) {
       ) : (
         <ScrollArea style={{ flex: 1 }} type="hover">
           <div className="library-groups">
-            {groups.length === 0 && <Text c="dimmed">Nothing matches "{filter}".</Text>}
-            {groups.map(({ collection: c, folders, requests }) => {
-              const folder = folders.at(-1);
-              const title = [c.name, ...folders.map((f) => f.name)].join(' › ');
+            {searching && groups.length === 0 && <Text c="dimmed">Nothing matches "{filter}".</Text>}
+            {app.collections.map((c) => {
+              const own = groups.filter((g) => g.collection.id === c.id);
+              if (searching && !own.length) return null;
+              const open = searching || !collapsed.includes(c.id);
+              const count = countRequests(c.items);
               return (
-                <div key={folder?.id ?? c.id} className="library-group">
-                  {full
-                    ? <ItemMenu label={title} className="group-title" menu={actions.containerMenu({ collection: c, item: folder })}><Text size="xs" c="dimmed">{title}</Text></ItemMenu>
-                    : <Text size="xs" c="dimmed" className="group-title">{title}</Text>}
-                  <div className="tickets">
-                    {requests.map((r) => {
-                      const ticket = (
-                        <button
-                          type="button" className="ticket-add" draggable title="Add to flow" aria-label={`Add ${r.method} ${r.name} to flow`}
-                          onDragStart={(e) => { e.dataTransfer.setData(TICKET_MIME, JSON.stringify({ collectionId: c.id, requestId: r.id })); e.dataTransfer.effectAllowed = 'copy'; }}
-                          onClick={() => app.addStation(c.id, r.id)}
-                        >
-                          <MethodGlyph method={r.method} />
-                          <span className="ticket-name">{r.name}</span>
-                          {r.id in app.drafts && <span className="signal-dot" data-signal="caution" title="Unsaved changes" />}
-                          <span className="ticket-plus" aria-hidden>+</span>
-                        </button>
-                      );
-                      return full ? (
-                        <ItemMenu key={r.id} label={r.name} className="ticket" menu={actions.requestMenu(c, r)}>{ticket}</ItemMenu>
-                      ) : <div key={r.id} className="ticket">{ticket}</div>;
-                    })}
-                    {full && !(folder ?? c).items.length && <Text size="xs" c="dimmed">Empty. Add a request from the menu.</Text>}
-                  </div>
-                </div>
+                <section key={c.id} className="dock-collection">
+                  <button type="button" className="dock-collection-head" aria-expanded={open} onClick={() => { if (!searching) toggle(c.id); }}>
+                    {Icons.chevron(open)}
+                    <span className="tree-name" data-root>{c.name}</span>
+                    <span className="section-count">{count}</span>
+                  </button>
+                  {open && own.map(({ folders, requests }) => (
+                    <div key={folders.at(-1)?.id ?? c.id} className="library-group" style={{ paddingLeft: folders.length * 14 }}>
+                      {folders.length > 0 && <Text size="xs" c="dimmed" className="group-title">{folders.map((f) => f.name).join(' › ')}</Text>}
+                      <div className="tickets">
+                        {requests.map((r) => (
+                          <div key={r.id} className="ticket">
+                            <button
+                              type="button" className="ticket-add" draggable title="Add to flow" aria-label={`Add ${r.method} ${r.name} to flow`}
+                              onDragStart={(e) => { e.dataTransfer.setData(TICKET_MIME, JSON.stringify({ collectionId: c.id, requestId: r.id })); e.dataTransfer.effectAllowed = 'copy'; }}
+                              onClick={() => onAdd(c.id, r.id)}
+                            >
+                              <MethodGlyph method={r.method} />
+                              <span className="ticket-name">{r.name}</span>
+                              {r.id in app.drafts && <span className="signal-dot" data-signal="caution" title="Unsaved changes" />}
+                              <span className="ticket-plus" aria-hidden>+</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </section>
               );
             })}
           </div>
         </ScrollArea>
       )}
-
-      {actions.dialogs}
     </div>
   );
 }

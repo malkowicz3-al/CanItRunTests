@@ -43,6 +43,11 @@ Kolejność: backend → dist smoke → frontend. [S] sekwencyjny, [P] równoleg
 
 **F15 [S] Dokumentacja i finalny build** — ARCHITECTURE §10.6/10.7, CLAUDE.md; build + test + test:dist + typecheck; ręcznie: dist bez node_modules, flow z 2 węzłami, Run, podgląd na żywo, Cancel, odświeżenie w trakcie.
 
+## Zmiana 2026-11-22: tylko dwie zakładki (część F13/F14)
+- Rail: tylko **Endpoints** (dotychczasowy ekran Requests, przemianowany w GUI) i **Flows**. Usunąć zakładkę Library (`Library mode="full"`, screen `'library'`) i przycisk Load tests: Stage 3. Menu zarządzania (new collection, rename, delete, collection variables, import) już są w drzewie Requests; przycisk New collection/Import ma być w nagłówku drzewa.
+- Zakładka Environments znika z railu: `EnvironmentsView` otwierany w dużym Drawerze z przycisku „Manage” obok `EnvironmentSelect` w top barze (`editEnvironment` otwiera ten Drawer zamiast zmieniać screen). `SCREENS = ['requests', 'flows']`; stara wartość `cirt.screen` spoza listy → `'requests'`.
+- Dok endpointów we Flows: drzewo pogrupowane po kolekcjach, każda kolekcja jako wyraźny, zwijany nagłówek (nazwa, licznik requestów, akcent koloru/ikona kolekcji), foldery jako wcięte podgrupy, wyszukiwarka filtruje i rozwija pasujące. Stan zwinięcia w localStorage (`cirt.dock.collapsed`). Wpisy przeciągalne (`TICKET_MIME`) i klikalne (dodaj do otwartego flow). Węzeł Request na płótnie pokazuje nazwę kolekcji, żeby się nie myliły requesty o tej samej nazwie.
+
 ## Równoległość
 F0 → F1 → (F2 ∥ F3 ∥ F6) → F4 → F5 → F7 → F8 → bramka → F9 → F10 → (F11 ∥ F12) → F13 → F14 → F15.
 

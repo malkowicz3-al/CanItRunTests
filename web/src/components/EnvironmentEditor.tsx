@@ -98,7 +98,7 @@ export function VariablesEditor({ draftKey, title, subtitle, values, onSave }: {
   );
 }
 
-/** Environments screen: globals and environments as rows on the left, the editor on the right. */
+/** Environments drawer: globals and environments as rows on the left, the editor on the right. */
 export function EnvironmentsView() {
   const app = useApp();
   const sel = app.envSelection;
@@ -136,15 +136,18 @@ export function EnvironmentsView() {
   );
 }
 
-/** Active environment picker in the top bars of Requests and Flows. */
+/** Active environment picker in the top bars of Requests and Flows; Manage opens the environments drawer. */
 export function EnvironmentSelect() {
   const app = useApp();
+  const value = app.environments.some((e) => e.id === app.activeEnvId) ? app.activeEnvId : null;
   return (
-    <Select
-      w={220} placeholder="No environment" clearable searchable aria-label="Active environment" leftSection={Icons.layers()}
-      data={app.environments.map((e) => ({ value: e.id, label: e.name }))}
-      value={app.environments.some((e) => e.id === app.activeEnvId) ? app.activeEnvId : null}
-      onChange={app.setActiveEnvId}
-    />
+    <Group gap={4} wrap="nowrap">
+      <Select
+        w={220} placeholder="No environment" clearable searchable aria-label="Active environment" leftSection={Icons.layers()}
+        data={app.environments.map((e) => ({ value: e.id, label: e.name }))}
+        value={value} onChange={app.setActiveEnvId}
+      />
+      <Button variant="default" onClick={() => app.editEnvironment(value ?? 'globals')}>Manage</Button>
+    </Group>
   );
 }

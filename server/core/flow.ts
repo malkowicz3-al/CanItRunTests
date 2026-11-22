@@ -44,6 +44,7 @@ export async function runFlow(input: FlowInput, hooks: FlowHooks = {}, send: Sen
     if (result.nextRequest !== undefined) [...result.preScripts, ...result.testScripts].at(-1)?.logs.push({ level: 'warn', text: NEXT_REQUEST_WARNING });
     const outcome = nodeOutcome(result, continueWhen);
     hooks.onNodeEnd?.(node, result, outcome, s);
+    if (hooks.signal?.aborted) return { status: 'cancelled', nodeRuns }; // a cancel must not follow the Fail pin
     node = nextNode(flow, node.id, outcome);
   }
   return { status: 'done', nodeRuns };

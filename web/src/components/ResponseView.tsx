@@ -104,7 +104,7 @@ export function LastResult({ result, failure, running, tabs }: { result?: RunRes
   const [tab, setTab] = useState<string | null>('body'); // kept across runs: LastResult stays mounted
   if (running) return <Group gap="xs"><Loader size="xs" color="caution" /><Text c="dimmed">Running...</Text></Group>;
   if (failure) return <Text className="signal-text" data-signal="stop" ff="monospace" size="xs">{failure}</Text>;
-  if (!result) return <Text c="dimmed">{tabs ? 'Not sent yet. Press Send or Ctrl + Enter.' : 'Not run yet. Press Run station or Ctrl + Enter.'}</Text>;
+  if (!result) return <Text c="dimmed">{tabs ? 'Not sent yet. Press Send or Ctrl + Enter.' : 'Not run yet. Press Run node or Ctrl + Enter.'}</Text>;
   const res = result.response;
   const all = [...result.preScripts, ...result.testScripts];
   const tests = all.flatMap((s) => s.tests);

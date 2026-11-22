@@ -23,8 +23,6 @@ export const Icons = {
   search: () => svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>, 14),
   requests: () => svg(<><path d="M4 5h4M4 12h4M4 19h4" /><path d="M11 5h9M11 12h9M11 19h9" /></>, 20),
   track: () => svg(<><path d="M2 12h20" /><circle cx="6" cy="12" r="2.5" fill="currentColor" /><circle cx="18" cy="12" r="2.5" /></>, 20),
-  library: () => svg(<><rect x="3" y="5" width="8" height="5" rx="1.5" /><rect x="13" y="5" width="8" height="5" rx="1.5" /><rect x="3" y="14" width="8" height="5" rx="1.5" /></>, 20),
-  bolt: () => svg(<path d="M13 3L5 14h6l-1 7 8-11h-6z" />, 20),
 };
 
 /** Counter next to a tab or section title; 0 or undefined shows nothing. */
@@ -40,19 +38,18 @@ export function MethodGlyph({ method, w }: { method: string; w?: number }) {
 }
 
 /** Collapsible inspector section; the body is only mounted when open (keeps closed Monaco editors out of the DOM). */
-export function Section({ title, count, defaultOpen = false, disabled, hint, children }: {
-  title: string; count?: ReactNode; defaultOpen?: boolean; disabled?: boolean; hint?: string; children?: ReactNode;
+export function Section({ title, count, defaultOpen = false, children }: {
+  title: string; count?: ReactNode; defaultOpen?: boolean; children?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="section" data-disabled={disabled || undefined}>
-      <button type="button" className="section-head" aria-expanded={!disabled && open} disabled={disabled} onClick={() => setOpen(!open)}>
-        {Icons.chevron(!disabled && open)}
+    <section className="section">
+      <button type="button" className="section-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {Icons.chevron(open)}
         <span className="section-title">{title}</span>
         {countBadge(count)}
-        {hint && <span className="section-hint">{hint}</span>}
       </button>
-      {!disabled && open && <div className="section-body">{children}</div>}
+      {open && <div className="section-body">{children}</div>}
     </section>
   );
 }

@@ -1,5 +1,5 @@
-import type { ImportResult, RunRequestBody, RunResult } from '../../shared/api';
-import type { Collection, Environment, Globals, Id } from '../../shared/model';
+import type { FlowRunState, ImportResult, RunFlowBody, RunRequestBody, RunResult } from '../../shared/api';
+import type { Collection, Environment, Flow, Globals, Id } from '../../shared/model';
 
 export class ApiError extends Error {
   constructor(public status: number, public body: unknown, message: string) { super(message); }
@@ -32,4 +32,12 @@ export const api = {
   saveGlobals: (g: Globals) => call<Globals>('PUT', '/api/globals', g),
   importPostman: (json: unknown, overwrite: boolean) => call<ImportResult>('POST', `/api/import${overwrite ? '?overwrite=true' : ''}`, json),
   run: (b: RunRequestBody) => call<RunResult>('POST', '/api/run', b),
+  listFlows: () => call<{ id: Id; name: string }[]>('GET', '/api/flows'),
+  getFlow: (id: Id) => call<Flow>('GET', `/api/flows/${id}`),
+  createFlow: (f: Partial<Flow>) => call<Flow>('POST', '/api/flows', f),
+  saveFlow: (f: Flow) => call<Flow>('PUT', `/api/flows/${f.id}`, f),
+  deleteFlow: (id: Id) => call<void>('DELETE', `/api/flows/${id}`),
+  runFlow: (id: Id, b: RunFlowBody) => call<{ runId: Id }>('POST', `/api/flows/${id}/run`, b),
+  cancelFlow: (id: Id) => call<void>('POST', `/api/flows/${id}/cancel`),
+  getFlowRun: (id: Id) => call<FlowRunState>('GET', `/api/flows/${id}/run`),
 };
