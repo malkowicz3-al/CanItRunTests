@@ -1,0 +1,85 @@
+{
+  "info": {
+    "_postman_id": "00000000-0000-4000-8000-000000000001",
+    "name": "Sample API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }] },
+  "event": [
+    { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["// collection pre", "pm.variables.set('a', '1');"] } },
+    { "listen": "test", "script": { "type": "text/javascript", "exec": ["// collection test"] } }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "https://api.example.test" },
+    { "key": "old", "value": "x", "disabled": true }
+  ],
+  "item": [
+    {
+      "name": "Users",
+      "event": [{ "listen": "prerequest", "script": { "exec": ["// folder pre"] } }],
+      "item": [
+        {
+          "name": "Get user",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["// request pre"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('ok', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "X-Debug", "value": "1", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/:id?verbose=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", ":id"],
+              "query": [{ "key": "verbose", "value": "true" }],
+              "variable": [{ "key": "id", "value": "42" }]
+            }
+          }
+        },
+        {
+          "name": "Admin",
+          "auth": { "type": "noauth" },
+          "item": [
+            {
+              "name": "Create user",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "basic", "basic": [{ "key": "username", "value": "admin" }, { "key": "password", "value": "dummy-password" }] },
+                "body": { "mode": "raw", "raw": "{\"name\":\"Alice\"}", "options": { "raw": { "language": "json" } } },
+                "url": "{{baseUrl}}/users"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "OAuth call",
+      "request": {
+        "method": "get",
+        "auth": { "type": "oauth2", "oauth2": [{ "key": "accessToken", "value": "dummy-access-token" }, { "key": "tokenType", "value": "Bearer" }] },
+        "url": "{{baseUrl}}/me"
+      }
+    },
+    {
+      "name": "Api key in query",
+      "request": {
+        "method": "GET",
+        "auth": { "type": "apikey", "apikey": [{ "key": "key", "value": "api_key" }, { "key": "value", "value": "dummy-key" }, { "key": "in", "value": "query" }] },
+        "body": { "mode": "urlencoded", "urlencoded": [{ "key": "q", "value": "1" }] },
+        "url": "{{baseUrl}}/search"
+      }
+    },
+    {
+      "name": "GraphQL",
+      "request": {
+        "method": "POST",
+        "body": { "mode": "graphql", "graphql": { "query": "{ me { id } }" } },
+        "url": "{{baseUrl}}/graphql"
+      }
+    }
+  ]
+}

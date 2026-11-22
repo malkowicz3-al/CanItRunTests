@@ -1,0 +1,462 @@
+{
+  "info": {
+    "_postman_id": "6d1c7b5e-0f6a-4a7e-9d3b-1f0c2a9e5b01",
+    "name": "Free APIs demo",
+    "description": "Demo collection for CanItRunTests: JSONPlaceholder, httpbin, Restful-Booker and PokeAPI. Use with the 'Free APIs - public' environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Response time below 5 s', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "JSONPlaceholder",
+      "item": [
+        {
+          "name": "List posts",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const posts = pm.response.json();",
+                  "pm.test('Returns a non-empty array', function () {",
+                  "    pm.expect(posts).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "pm.environment.set('postId', String(posts[0].id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{jsonPlaceholderUrl}}/posts?userId=1"
+          }
+        },
+        {
+          "name": "Get post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Has title', function () {",
+                  "    pm.expect(pm.response.json()).to.have.property('title');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{jsonPlaceholderUrl}}/posts/{{postId}}"
+          }
+        },
+        {
+          "name": "Create post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Echoes title', function () {",
+                  "    pm.expect(pm.response.json().title).to.eql('Hello from CanItRunTests');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Hello from CanItRunTests\",\n  \"body\": \"Created at {{$isoTimestamp}}\",\n  \"userId\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{jsonPlaceholderUrl}}/posts"
+          }
+        },
+        {
+          "name": "Delete post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{jsonPlaceholderUrl}}/posts/{{postId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "httpbin",
+      "item": [
+        {
+          "name": "GET with dynamic variables",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const args = pm.response.json().args;",
+                  "pm.test('requestId is a GUID', function () {",
+                  "    pm.expect(args.requestId).to.match(/^[0-9a-f-]{36}$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Client", "value": "CanItRunTests" }
+            ],
+            "url": "{{httpbinUrl}}/get?requestId={{$guid}}&ts={{$timestamp}}"
+          }
+        },
+        {
+          "name": "Signed request (HS256 JWS)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Generates sendDate, then signs the whole body as a compact JWS (HS256) - same idea as a real signed request.",
+                  "function b64url(wordArray) {",
+                  "    return CryptoJS.enc.Base64.stringify(wordArray).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+                  "}",
+                  "",
+                  "const payload = {",
+                  "    orderId: 'ORD-' + Math.floor(Math.random() * 100000),",
+                  "    amount: 123.45,",
+                  "    sendDate: new Date().toISOString()",
+                  "};",
+                  "const body = JSON.stringify(payload);",
+                  "",
+                  "const header = { alg: 'HS256', typ: 'JOSE' };",
+                  "const signingInput = b64url(CryptoJS.enc.Utf8.parse(JSON.stringify(header))) + '.' + b64url(CryptoJS.enc.Utf8.parse(body));",
+                  "const signature = b64url(CryptoJS.HmacSHA256(signingInput, pm.environment.get('hmacSecret')));",
+                  "",
+                  "pm.variables.set('signedBody', body);",
+                  "pm.variables.set('jwsSignature', signingInput + '.' + signature);",
+                  "console.log('Signed body', body);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const echo = pm.response.json();",
+                  "pm.test('Signature header was sent', function () {",
+                  "    pm.expect(echo.headers['X-Jws-Signature']).to.have.length.above(20);",
+                  "});",
+                  "pm.test('Body contains sendDate', function () {",
+                  "    pm.expect(echo.json).to.have.property('sendDate');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-JWS-Signature", "value": "{{jwsSignature}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{{signedBody}}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{httpbinUrl}}/anything/payments"
+          }
+        },
+        {
+          "name": "Basic auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Authenticated', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().authenticated).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "demo", "type": "string" },
+                { "key": "password", "value": "demo-pass", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{httpbinUrl}}/basic-auth/demo/demo-pass"
+          }
+        },
+        {
+          "name": "Status 503 (expected failure)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Server returns 503', function () { pm.response.to.have.status(503); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{httpbinUrl}}/status/503"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Restful-Booker (token flow)",
+      "item": [
+        {
+          "name": "Create token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const token = pm.response.json().token;",
+                  "pm.test('Token returned', function () { pm.expect(token).to.be.a('string'); });",
+                  "pm.environment.set('bookerToken', token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{bookerUser}}\",\n  \"password\": \"{{bookerPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{bookerUrl}}/auth"
+          }
+        },
+        {
+          "name": "Create booking",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const checkin = new Date();",
+                  "const checkout = new Date(checkin.getTime() + 3 * 24 * 3600 * 1000);",
+                  "pm.variables.set('checkin', checkin.toISOString().slice(0, 10));",
+                  "pm.variables.set('checkout', checkout.toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const id = pm.response.json().bookingid;",
+                  "pm.test('Booking id returned', function () { pm.expect(id).to.be.a('number'); });",
+                  "pm.environment.set('bookingId', String(id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Jan\",\n  \"lastname\": \"Tester\",\n  \"totalprice\": 250,\n  \"depositpaid\": true,\n  \"bookingdates\": {\n    \"checkin\": \"{{checkin}}\",\n    \"checkout\": \"{{checkout}}\"\n  },\n  \"additionalneeds\": \"Breakfast\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{bookerUrl}}/booking"
+          }
+        },
+        {
+          "name": "Get booking",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Firstname is Jan', function () {",
+                  "    pm.expect(pm.response.json().firstname).to.eql('Jan');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": "{{bookerUrl}}/booking/{{bookingId}}"
+          }
+        },
+        {
+          "name": "Update booking (needs token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Price updated', function () {",
+                  "    pm.expect(pm.response.json().totalprice).to.eql(999);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Cookie", "value": "token={{bookerToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"totalprice\": 999\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{bookerUrl}}/booking/{{bookingId}}"
+          }
+        },
+        {
+          "name": "Delete booking (needs token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201 (Restful-Booker quirk)', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Cookie", "value": "token={{bookerToken}}" }
+            ],
+            "url": "{{bookerUrl}}/booking/{{bookingId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "PokeAPI",
+      "item": [
+        {
+          "name": "Get pokemon",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "const p = pm.response.json();",
+                  "pm.test('Name matches', function () { pm.expect(p.name).to.eql(pm.environment.get('pokemonName')); });",
+                  "pm.environment.set('abilityName', p.abilities[0].ability.name);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{pokeApiUrl}}/pokemon/{{pokemonName}}"
+          }
+        },
+        {
+          "name": "Get first ability",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Ability name matches', function () {",
+                  "    pm.expect(pm.response.json().name).to.eql(pm.environment.get('abilityName'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{pokeApiUrl}}/ability/{{abilityName}}"
+          }
+        }
+      ]
+    }
+  ]
+}
