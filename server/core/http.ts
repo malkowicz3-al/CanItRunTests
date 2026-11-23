@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { performance } from 'node:perf_hooks';
+import tls from 'node:tls';
 import zlib from 'node:zlib';
 import type { HttpError, HttpResponse, PreparedRequest, Redirect } from '../../shared/api';
 import type { Environment } from '../../shared/model';
@@ -24,6 +25,21 @@ export interface HttpResult {
 const RESPONSE_BODY_LIMIT = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 10;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+// Like Postman: trust the OS certificate store (corporate root CAs) besides Node's bundled list.
+// Needs Node 22.15+ (getCACertificates); older Node keeps the bundled list only.
+const tlsCa = tls as typeof tls & { getCACertificates?: (type: string) => string[]; setDefaultCACertificates?: (certs: string[]) => void };
+const systemCa = (() => {
+  try {
+    if (!tlsCa.getCACertificates) return undefined;
+    const all = [...new Set([...tlsCa.getCACertificates('default'), ...tlsCa.getCACertificates('system')])];
+    if (tlsCa.setDefaultCACertificates) { tlsCa.setDefaultCACertificates(all); return undefined; }
+    return all; // shortcut: Node 22.15-22.18 has no setDefaultCACertificates, so the list goes with every request
+  } catch (e) {
+    console.warn(`System certificate store not loaded: ${(e as Error).message}`);
+    return undefined;
+  }
+})();
 
 export async function execute(req: PreparedRequest, opts: HttpOptions): Promise<HttpResult> {
   const redirects: Redirect[] = [];
@@ -67,7 +83,7 @@ function once(req: PreparedRequest, opts: HttpOptions, deadline: number): Promis
     headers: req.headers,
     agent: (isHttps ? opts.agents?.https : opts.agents?.http) ?? false,
     signal: opts.signal,
-    ...(isHttps && { rejectUnauthorized: !opts.ignoreTls, cert: c?.cert || undefined, key: c?.key || undefined, passphrase: c?.passphrase || undefined, ca: c?.ca || undefined }),
+    ...(isHttps && { rejectUnauthorized: !opts.ignoreTls, cert: c?.cert || undefined, key: c?.key || undefined, passphrase: c?.passphrase || undefined, ca: c?.ca || systemCa }),
   };
 
   return new Promise((resolve, reject) => {

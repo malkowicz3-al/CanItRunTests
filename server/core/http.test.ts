@@ -129,3 +129,10 @@ test('keep-alive agents reuse the socket for http and https', async () => {
     agents.https.destroy();
   }
 });
+
+test('OS certificate store is trusted (corporate root CAs, like Postman)', async () => {
+  const tls = (await import('node:tls')) as typeof import('node:tls') & { getCACertificates?: (t: string) => string[]; setDefaultCACertificates?: unknown };
+  if (!tls.getCACertificates || !tls.setDefaultCACertificates) return; // older Node: per-request list or bundled only
+  const trusted = new Set(tls.getCACertificates('default'));
+  expect(tls.getCACertificates('system').every((c) => trusted.has(c))).toBe(true);
+});

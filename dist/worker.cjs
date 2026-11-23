@@ -36690,10 +36690,26 @@ var CALL_SAMPLE_LIMIT = 16 * 1024;
 var import_node_http = __toESM(require("node:http"), 1);
 var import_node_https = __toESM(require("node:https"), 1);
 var import_node_perf_hooks = require("node:perf_hooks");
+var import_node_tls = __toESM(require("node:tls"), 1);
 var import_node_zlib = __toESM(require("node:zlib"), 1);
 var RESPONSE_BODY_LIMIT = 10 * 1024 * 1024;
 var MAX_REDIRECTS = 10;
 var REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+var tlsCa = import_node_tls.default;
+var systemCa = (() => {
+  try {
+    if (!tlsCa.getCACertificates) return void 0;
+    const all = [.../* @__PURE__ */ new Set([...tlsCa.getCACertificates("default"), ...tlsCa.getCACertificates("system")])];
+    if (tlsCa.setDefaultCACertificates) {
+      tlsCa.setDefaultCACertificates(all);
+      return void 0;
+    }
+    return all;
+  } catch (e) {
+    console.warn(`System certificate store not loaded: ${e.message}`);
+    return void 0;
+  }
+})();
 async function execute(req, opts) {
   const redirects = [];
   let current = req;
@@ -36734,7 +36750,7 @@ function once(req, opts, deadline) {
     headers: req.headers,
     agent: (isHttps ? opts.agents?.https : opts.agents?.http) ?? false,
     signal: opts.signal,
-    ...isHttps && { rejectUnauthorized: !opts.ignoreTls, cert: c?.cert || void 0, key: c?.key || void 0, passphrase: c?.passphrase || void 0, ca: c?.ca || void 0 }
+    ...isHttps && { rejectUnauthorized: !opts.ignoreTls, cert: c?.cert || void 0, key: c?.key || void 0, passphrase: c?.passphrase || void 0, ca: c?.ca || systemCa }
   };
   return new Promise((resolve2, reject) => {
     const start = import_node_perf_hooks.performance.now();

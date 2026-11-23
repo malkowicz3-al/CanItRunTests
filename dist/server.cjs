@@ -85284,7 +85284,7 @@ var require_websocket = __commonJS({
     var http = require("http");
     var net = require("net");
     var querystring = require("querystring");
-    var tls = require("tls");
+    var tls2 = require("tls");
     var { randomBytes, createHash } = require("crypto");
     var { Duplex, Readable } = require("stream");
     var { URL: URL2 } = require("url");
@@ -86058,7 +86058,7 @@ var require_websocket = __commonJS({
       if (!options.servername && options.servername !== "") {
         options.servername = net.isIP(options.host) ? "" : options.host;
       }
-      return tls.connect(options);
+      return tls2.connect(options);
     }
     function abortHandshake(websocket2, stream, message) {
       websocket2._readyState = WebSocket.CLOSING;
@@ -90414,7 +90414,23 @@ function keepItemIds(old, fresh) {
 }
 
 // server/core/http.ts
+var import_node_tls = __toESM(require("node:tls"), 1);
 var RESPONSE_BODY_LIMIT = 10 * 1024 * 1024;
+var tlsCa = import_node_tls.default;
+var systemCa = (() => {
+  try {
+    if (!tlsCa.getCACertificates) return void 0;
+    const all = [.../* @__PURE__ */ new Set([...tlsCa.getCACertificates("default"), ...tlsCa.getCACertificates("system")])];
+    if (tlsCa.setDefaultCACertificates) {
+      tlsCa.setDefaultCACertificates(all);
+      return void 0;
+    }
+    return all;
+  } catch (e) {
+    console.warn(`System certificate store not loaded: ${e.message}`);
+    return void 0;
+  }
+})();
 
 // server/core/variables.ts
 var words = (s) => s.split(" ");
