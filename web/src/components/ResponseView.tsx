@@ -115,6 +115,8 @@ export function LastResult({ result, failure, running, bodyPath = 'response' }: 
   const logCount = all.reduce((n, s) => n + s.logs.length, 0);
   const ct = res && [res.headers['content-type']].flat()[0];
   const body = res ? prettyBody(res.body, ct) : undefined;
+  const scriptMs = (s: ScriptResult[]) => s.reduce((n, x) => n + (x.ms ?? 0), 0);
+  const preMs = scriptMs(result.preScripts), testMs = scriptMs(result.testScripts);
   const scriptErrors = [...result.preScripts.map((s) => ['Pre-request', s.error]), ...result.testScripts.map((s) => ['Test', s.error])].filter(([, e]) => e);
 
   const summary = <>
@@ -123,6 +125,7 @@ export function LastResult({ result, failure, running, bodyPath = 'response' }: 
         <Text size="xl" fw={600} ff="monospace" className="signal-text" data-signal={statusSignal(res.status)}>{res.status}</Text>
         <Text c="dimmed">{res.statusText}</Text>
         <Text c="dimmed">Time <Text span ff="monospace" c="var(--mantine-color-text)">{formatMs(res.timings.total)}</Text></Text>
+        {preMs + testMs >= 1 && <Text c="dimmed">Scripts <Text span ff="monospace" c="var(--mantine-color-text)">{formatMs(preMs + testMs)}</Text></Text>}
         <Text c="dimmed">Size <Text span ff="monospace" c="var(--mantine-color-text)">{formatSize(res.size)}</Text></Text>
       </Group>
     ) : <Text size="lg" fw={600} className="signal-text" data-signal="stop">No response</Text>}
@@ -140,7 +143,15 @@ export function LastResult({ result, failure, running, bodyPath = 'response' }: 
     headers: { title: 'Headers', count: res ? Object.keys(res.headers).length : 0, view: res ? <HeaderTable headers={res.headers} /> : <Text c="dimmed">No response.</Text> },
     tests: { title: 'Tests', count: tests.length ? `${tests.length - failed}/${tests.length}` : 0, view: <Tests scripts={all} /> },
     console: { title: 'Console', count: logCount, view: <ConsoleView r={result} /> },
-    timing: { title: 'Timing', count: 0, view: res ? <TimingLine t={res.timings} /> : <Text c="dimmed">No response.</Text> },
+    timing: { title: 'Timing', count: 0, view: (
+      <Stack gap="sm">
+        {res ? <TimingLine t={res.timings} /> : <Text c="dimmed">No response.</Text>}
+        <Group gap="md">
+          <Text size="xs" c="dimmed">Pre-request scripts <Text span size="xs" ff="monospace" c="var(--mantine-color-text)">{formatMs(preMs)}</Text></Text>
+          <Text size="xs" c="dimmed">Test scripts <Text span size="xs" ff="monospace" c="var(--mantine-color-text)">{formatMs(testMs)}</Text></Text>
+        </Group>
+      </Stack>
+    ) },
     sent: { title: 'Sent request', count: result.redirects.length ? `${result.redirects.length} redirect${result.redirects.length > 1 ? 's' : ''}` : 0, view: <SentRequest r={result} /> },
   };
   const count = (c: string | number) => (c === 0 ? null : <span className="section-count">{c}</span>);

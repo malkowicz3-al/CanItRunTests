@@ -36,6 +36,7 @@ export interface ScriptResult {
   nextRequest?: string | null;
   error?: string;
   skipped?: true; // pm.execution.skipRequest() in a pre-script
+  ms?: number; // run time incl. its pm.sendRequest calls and timers
 }
 
 export interface RunRequestBody {

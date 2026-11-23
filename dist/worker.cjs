@@ -39912,6 +39912,7 @@ async function runScript(code, ctx) {
   const g = globalThis;
   if (activeScripts++ === 0) baseGlobals = new Set(Object.getOwnPropertyNames(g));
   const start = Date.now();
+  const startedAt = performance.now();
   let timer;
   try {
     let main;
@@ -39943,6 +39944,7 @@ async function runScript(code, ctx) {
     }
   }
   for (const [name, v] of Object.entries(tests)) result2.tests.push({ name, passed: !!v });
+  result2.ms = performance.now() - startedAt;
   return result2;
 }
 

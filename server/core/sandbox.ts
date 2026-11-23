@@ -317,6 +317,7 @@ export async function runScript(code: string, ctx: ScriptCtx): Promise<ScriptRes
   const g = globalThis as unknown as Record<string, unknown>;
   if (activeScripts++ === 0) baseGlobals = new Set(Object.getOwnPropertyNames(g));
   const start = Date.now();
+  const startedAt = performance.now();
   let timer: NodeJS.Timeout | undefined;
   try {
     let main: Promise<unknown>;
@@ -344,5 +345,6 @@ export async function runScript(code: string, ctx: ScriptCtx): Promise<ScriptRes
     if (--activeScripts === 0) for (const k of Object.getOwnPropertyNames(g)) if (!baseGlobals.has(k)) Reflect.deleteProperty(g, k);
   }
   for (const [name, v] of Object.entries(tests)) result.tests.push({ name, passed: !!v });
+  result.ms = performance.now() - startedAt;
   return result;
 }
