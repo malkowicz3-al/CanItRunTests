@@ -9,6 +9,7 @@ export function nodeOutcome(r: RunResult, continueWhen: number[]): Pin {
   const s = r.response?.status;
   const statusOk = s !== undefined && (continueWhen.length ? continueWhen.includes(s) : s >= 200 && s < 300);
   const scriptsOk = [...r.preScripts, ...r.testScripts].every((x) => !x.error && x.tests.every((t) => t.passed));
+  if (r.error?.code === 'ESKIPPED') return 'ok'; // pm.execution.skipRequest() is intentional, not a failure
   return !r.error && statusOk && scriptsOk ? 'ok' : 'fail';
 }
 

@@ -81,3 +81,10 @@ test('abort mid-request returns ECANCELED faster than mock delay', async () => {
   expect(r.error!.code).toBe('ECANCELED');
   expect(r.response).toBeUndefined();
 });
+
+test('pm.execution.skipRequest skips sending', async () => {
+  const r = await runRequest({ collection: collection(request({ scripts: { pre: 'pm.execution.skipRequest()', test: '' } })), requestId: 'r', scopes: scopes() });
+  expect(r.error).toEqual({ code: 'ESKIPPED', message: 'Request skipped by pre-request script' });
+  expect(r.response).toBeUndefined();
+  expect(r.preScripts[0].skipped).toBe(true);
+});

@@ -1,7 +1,7 @@
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import type { Scopes } from '../../shared/api';
+import type { HttpResponse, Scopes } from '../../shared/api';
 import { startMockServer } from '../../test/mockServer';
 import { runScript, type ScriptCtx } from './sandbox';
 
@@ -131,9 +131,9 @@ test('node crypto', async () => {
 });
 
 test('unknown API gives readable error', async () => {
-  const r = await runScript(`pm.cookies.get('a')`, ctx());
-  expect(r.error).toBe('Error: pm.cookies is not supported');
-  expect(r.logs).toEqual([{ level: 'error', text: 'Error: pm.cookies is not supported' }]);
+  const r = await runScript(`pm.vault.get('a')`, ctx());
+  expect(r.error).toBe('Error: pm.vault is not supported');
+  expect(r.logs).toEqual([{ level: 'error', text: 'Error: pm.vault is not supported' }]);
   expect((await runScript(`require('fs')`, ctx())).error).toMatch(/require\('fs'\) is not available/);
 });
 
@@ -207,3 +207,95 @@ test('timer started after the script timed out is never created', async () => {
   await new Promise((res) => setTimeout(res, 600));
   expect(r.logs.some((l) => JSON.stringify(l).includes('late tick'))).toBe(false);
 }, 10_000);
+
+const response = (p: Partial<HttpResponse> = {}): HttpResponse => ({
+  status: 200, statusText: 'OK', headers: { 'content-type': 'application/json', 'set-cookie': ['sid=abc; Path=/', 'x=1=2'] },
+  body: '{"a":{"b":[1]}}', size: 15, truncated: false, timings: { dns: 0, tcp: 0, tls: 0, ttfb: 0, transfer: 0, total: 5 }, ...p,
+});
+
+test('pm.response.to assertions incl .not', async () => {
+  const r = await runScript(`
+    pm.test('ok', () => { pm.response.to.be.ok; pm.response.to.be.success; pm.response.to.be.json; pm.response.to.be.withBody; });
+    pm.test('not', () => { pm.response.to.not.be.error; pm.response.to.not.be.clientError; pm.response.to.not.have.status(404); });
+    pm.test('have', () => { pm.response.to.have.status('OK'); pm.response.to.have.header('Content-Type', 'application/json'); pm.response.to.have.jsonBody('a.b[0]'); pm.response.to.have.body('{"a":{"b":[1]}}'); });
+    pm.test('fail', () => pm.response.to.be.serverError);
+    pm.test('fail not', () => pm.response.to.not.have.jsonBody('a'));
+    pm.test('cookies', () => pm.expect([pm.cookies.get('sid'), pm.cookies.get('x'), pm.response.reason(), pm.response.responseSize, pm.info.eventName]).to.deep.equal(['abc', '1=2', 'OK', 15, 'test']));
+  `, { ...ctx(), response: response() });
+  expect(r.tests.map((t) => t.passed)).toEqual([true, true, true, false, false, true]);
+  expect(r.tests[3].error).toBe('AssertionError: expected response to be a server error (5xx), got status 200');
+  expect(r.tests[4].error).toMatch(/^AssertionError: expected response not to have JSON body with 'a'/);
+});
+
+test('legacy API: tests[], postman.*, responseBody, globals snapshot', async () => {
+  const c = { ...ctx({ globals: [v('g', '1')] }), response: response() };
+  const r = await runScript(`
+    const _ = require('lodash');
+    tests['code is 200'] = responseCode.code === 200;
+    tests['body'] = JSON.parse(responseBody).a.b[0] === 1 && _.isEqual(globals, { g: '1' });
+    tests['fails'] = responseHeaders['content-type'] === 'text/plain';
+    postman.setEnvironmentVariable('t', responseTime);
+    postman.setNextRequest('N');
+  `, c);
+  expect(r.error).toBeUndefined();
+  expect(r.tests).toEqual([{ name: 'code is 200', passed: true }, { name: 'body', passed: true }, { name: 'fails', passed: false }]);
+  expect(c.scopes.environment.find((e) => e.key === 't')!.value).toBe('5');
+  expect(r.nextRequest).toBe('N');
+  expect((await runScript(`if (responseBody !== undefined || responseCode !== undefined) throw new Error('set')`, ctx())).error).toBeUndefined();
+});
+
+test('require moment, lodash, uuid; const shadows wrapper args', async () => {
+  const c = ctx();
+  const r = await runScript(`
+    const moment = require('moment'); const CryptoJS = require('crypto-js'); const lodash = require('lodash');
+    pm.environment.set('d', moment.utc('2020-01-02').add(1, 'day').format('YYYY-MM-DD'));
+    pm.environment.set('u', require('uuid').v4());
+    pm.environment.set('l', lodash.get({ a: [{ b: 7 }] }, 'a[0].b'));
+  `, c);
+  expect(r.error).toBeUndefined();
+  const get = (k: string) => c.scopes.environment.find((e) => e.key === k)!.value;
+  expect([get('d'), get('l')]).toEqual(['2020-01-03', '7']);
+  expect(get('u')).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+test('environment toObject/replaceIn/name, variables.toObject, request.url parts', async () => {
+  const c = { ...ctx({ runtime: { r: 'rt' }, environment: [v('a', 'env'), { key: 'off', value: 'x', enabled: false }], globals: [v('a', 'glob'), v('g', 'glob')] }), environmentName: 'Dev' };
+  c.request = { method: 'GET', url: '{{base}}/v1/users?x=1&y=2', headers: { Accept: '*/*' } };
+  const r = await runScript(`
+    pm.test('env', () => pm.expect([pm.environment.name, pm.environment.toObject(), pm.environment.replaceIn('{{a}}-{{r}}')]).to.deep.equal(['Dev', { a: 'env' }, 'env-rt']));
+    pm.test('vars', () => pm.expect(pm.variables.toObject()).to.deep.equal({ a: 'env', g: 'glob', r: 'rt' }));
+    pm.test('url', () => pm.expect([pm.request.url.getHost(), pm.request.url.getPath(), pm.request.url.getQueryString(), pm.request.headers.has('accept'), pm.info.eventName]).to.deep.equal(['{{base}}', '/v1/users', 'x=1&y=2', true, 'prerequest']));
+    pm.globals.clear();
+  `, c);
+  expect(r.tests.map((t) => [t.name, t.passed, t.error])).toEqual([['env', true, undefined], ['vars', true, undefined], ['url', true, undefined]]);
+  expect(c.scopes.globals).toEqual([]);
+});
+
+test('unsupported or mismatching response assertions fail instead of passing', async () => {
+  const r = await runScript(`
+    pm.test('notFound on 200', () => pm.response.to.be.notFound);
+    pm.test('unknown be', () => pm.response.to.be.foo);
+    pm.test('jsonBody value mismatch', () => pm.response.to.have.jsonBody('a.b[0]', 2));
+    pm.test('jsonBody value match', () => { pm.response.to.have.jsonBody('a.b', [1]); pm.response.to.not.have.jsonBody('a.b[0]', undefined); });
+    pm.test('hoisting', () => { pm.expect(f()).to.equal(1); function f() { return 1; } });
+    pm.execution.skipRequest();
+  `, { ...ctx(), response: response() });
+  expect(r.tests.map((t) => t.passed)).toEqual([false, false, false, true, true]);
+  expect(r.tests[1].error).toBe('Error: pm.response.to.foo is not supported');
+  expect(r.skipped).toBeUndefined();
+  expect(r.logs).toContainEqual({ level: 'warn', text: 'pm.execution.skipRequest() only works in pre-request scripts' });
+});
+
+test('legacy getResponseHeader/getResponseCookie and case-insensitive responseHeaders', async () => {
+  const r = await runScript(`
+    tests['h'] = postman.getResponseHeader('Content-Type') === 'application/json' && responseHeaders['Content-Type'] === 'application/json';
+    tests['c'] = postman.getResponseCookie('sid').value === 'abc' && postman.getResponseCookie('nope') === undefined;
+  `, { ...ctx(), response: response() });
+  expect(r.tests).toEqual([{ name: 'h', passed: true }, { name: 'c', passed: true }]);
+  expect((await runScript(`if (postman.getResponseHeader('x') !== undefined) throw new Error('set')`, ctx())).error).toBeUndefined();
+});
+
+test('top-level function is callable before its declaration', async () => {
+  const r = await runScript(`pm.environment.set('x', f()); function f() { return 'hoisted'; }`, ctx());
+  expect(r.error).toBeUndefined();
+});

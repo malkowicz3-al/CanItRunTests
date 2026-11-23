@@ -9,7 +9,7 @@ export interface HttpOptions {
   ignoreTls: boolean;
   clientCert?: Environment['clientCert']; // already resolved PEMs
   timeoutMs: number;
-  agent?: http.Agent; // keep-alive agent for load; single shots open a fresh socket
+  agents?: { http: http.Agent; https: https.Agent }; // keep-alive agents for load; single shots open a fresh socket
   followRedirects?: boolean; // default true
   signal?: AbortSignal; // cancel: aborts the hop in flight and stops the redirect chain
 }
@@ -65,7 +65,7 @@ function once(req: PreparedRequest, opts: HttpOptions, deadline: number): Promis
   const options: https.RequestOptions = {
     method: req.method,
     headers: req.headers,
-    agent: opts.agent ?? false,
+    agent: (isHttps ? opts.agents?.https : opts.agents?.http) ?? false,
     signal: opts.signal,
     ...(isHttps && { rejectUnauthorized: !opts.ignoreTls, cert: c?.cert || undefined, key: c?.key || undefined, passphrase: c?.passphrase || undefined, ca: c?.ca || undefined }),
   };
@@ -78,6 +78,7 @@ function once(req: PreparedRequest, opts: HttpOptions, deadline: number): Promis
     const fail = (e: Error) => { clearTimeout(timer); r.destroy(); reject(e); };
     r.on('error', fail);
     r.on('socket', (s) => {
+      if (r.reusedSocket) return; // keep-alive: no dns/tcp/tls, and once() listeners would pile up on the socket
       s.once('lookup', () => { lookup = performance.now(); });
       s.once('connect', () => { connect = performance.now(); });
       s.once('secureConnect', () => { secure = performance.now(); });

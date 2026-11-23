@@ -1,3 +1,5 @@
+import http from 'node:http';
+import https from 'node:https';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { startMockServer } from '../../test/mockServer';
 import { execute, type HttpOptions } from './http';
@@ -110,4 +112,20 @@ test('auth header stripped cross-host', async () => {
   expect(h.authorization).toBeUndefined();
   expect(h.cookie).toBeUndefined();
   expect(h['x-keep']).toBe('y');
+});
+
+test('keep-alive agents reuse the socket for http and https', async () => {
+  const agents = { http: new http.Agent({ keepAlive: true }), https: new https.Agent({ keepAlive: true }) };
+  try {
+    for (const base of [mock.http, mock.https]) {
+      const first = await get(`${base}/echo`, { agents, ignoreTls: true });
+      const second = await get(`${base}/echo`, { agents, ignoreTls: true });
+      expect(first.response!.timings.tcp).toBeGreaterThan(0);
+      expect(second.response!.status).toBe(200);
+      expect(second.response!.timings).toMatchObject({ dns: 0, tcp: 0, tls: 0 });
+    }
+  } finally {
+    agents.http.destroy();
+    agents.https.destroy();
+  }
 });

@@ -30,19 +30,20 @@ export async function runRequest(input: RunInput, send: Send = execute): Promise
     signal: input.signal,
   };
   const scriptSend = (r: PreparedRequest) => send(r, opts);
-  const requestName = p.item.name;
+  const info = { requestName: p.item.name, requestId: p.item.id, environmentName: env?.name, bodyMode: p.item.body.mode };
   const nextOf = (rs: ScriptResult[]) => rs.reduce<string | null | undefined>((n, x) => (x.nextRequest !== undefined ? x.nextRequest : n), undefined);
 
   const request = template(p.item);
   const preScripts: ScriptResult[] = [];
   for (const code of p.pre) {
     if (input.signal?.aborted) return { finalRequest: finalize(p, request, scopes), redirects: [], error: { code: 'ECANCELED', message: 'Cancelled' }, preScripts, testScripts: [], scopes, nextRequest: nextOf(preScripts) };
-    const res = await runScript(code, { scopes, request, requestName, send: scriptSend });
+    const res = await runScript(code, { scopes, request, ...info, send: scriptSend });
     preScripts.push(res);
     if (res.error) {
       // like Postman: a failing pre-request script cancels the request
       return { finalRequest: finalize(p, request, scopes), redirects: [], error: { code: 'ESCRIPT', message: `Pre-request script failed: ${res.error}` }, preScripts, testScripts: [], scopes, nextRequest: nextOf(preScripts) };
     }
+    if (res.skipped) return { finalRequest: finalize(p, request, scopes), redirects: [], error: { code: 'ESKIPPED', message: 'Request skipped by pre-request script' }, preScripts, testScripts: [], scopes, nextRequest: nextOf(preScripts) };
   }
 
   const http = await send(finalize(p, request, scopes), opts);
@@ -50,7 +51,7 @@ export async function runRequest(input: RunInput, send: Send = execute): Promise
   if (http.response) {
     for (const code of p.test) {
       if (input.signal?.aborted) break;
-      testScripts.push(await runScript(code, { scopes, request: { ...http.finalRequest, headers: { ...http.finalRequest.headers } }, response: http.response, requestName, send: scriptSend }));
+      testScripts.push(await runScript(code, { scopes, request: { ...http.finalRequest, headers: { ...http.finalRequest.headers } }, response: http.response, ...info, send: scriptSend }));
     }
   }
   return { ...http, preScripts, testScripts, scopes, nextRequest: nextOf([...preScripts, ...testScripts]) };

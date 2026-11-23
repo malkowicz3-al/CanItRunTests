@@ -92,6 +92,14 @@ function body(x: unknown, where: string, warnings: string[]): Body {
   }
 }
 
+function rebuildUrl(u: Obj): string {
+  const join = (x: unknown, sep: string) => (Array.isArray(x) ? x.map((p) => str(isObj(p) ? p.value : p)).join(sep) : str(x));
+  const path = join(u.path, '/');
+  const query = arr(u.query, 'url.query').filter((q) => isObj(q) && q.disabled !== true)
+    .map((q) => { const o = q as Obj; return o.value === undefined || o.value === null ? str(o.key) : `${str(o.key)}=${str(o.value)}`; }).join('&');
+  return `${u.protocol ? `${str(u.protocol)}://` : ''}${join(u.host, '.')}${u.port ? `:${str(u.port)}` : ''}${path && !path.startsWith('/') ? '/' : ''}${path}${query ? `?${query}` : ''}${u.hash ? `#${str(u.hash)}` : ''}`;
+}
+
 function item(x: unknown, where: string, warnings: string[]): Item {
   const o = obj(x, where);
   const name = str(o.name);
@@ -107,7 +115,7 @@ function item(x: unknown, where: string, warnings: string[]): Item {
   let url = '';
   let pathVariables: KeyValue[] = [];
   if (isObj(req.url)) {
-    url = str(req.url.raw); // shortcut: url objects without `raw` import as empty, rebuild from host/path when someone hits it
+    url = req.url.raw !== undefined ? str(req.url.raw) : rebuildUrl(req.url);
     pathVariables = keyValues(req.url.variable, `${at}.request.url.variable`);
   } else {
     url = str(req.url);

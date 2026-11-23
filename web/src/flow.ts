@@ -1,4 +1,4 @@
-import type { FlowRunState, WsMessage } from '../../shared/api';
+import type { FlowRunState, ResultSample, WsMessage } from '../../shared/api';
 import type { Flow, FlowEdge, FlowNode, Id, Pin, RequestItem } from '../../shared/model';
 import { uid } from './util';
 
@@ -52,6 +52,36 @@ export function applyRunEvent(s: FlowRunState | null, m: WsMessage): FlowRunStat
   if (m.type === 'flow.started') return { runId: m.runId, flowId: m.flowId, status: 'running', startedAt: new Date().toISOString(), path: [], nodes: {} };
   if (!s || s.runId !== m.runId) return s; // a missed start: the GET after reconnect catches up
   if (m.type === 'flow.done') return { ...s, status: m.status, error: m.error, currentNodeId: undefined };
+  if (m.type === 'flow.stats') { // cumulative; samples come only for nodes with new calls, the others keep theirs
+    const prev = s.load?.nodes ?? {};
+    const nodes = Object.fromEntries(Object.entries(m.load.nodes).map(([id, n]) => [id, { ...n, last: n.last ?? prev[id]?.last, lastError: n.lastError ?? prev[id]?.lastError }]));
+    return { ...s, load: { ...m.load, nodes } };
+  }
   if (m.phase === 'start') return { ...s, currentNodeId: m.nodeId, path: [...s.path, m.nodeId] };
   return { ...s, nodes: { ...s.nodes, [m.nodeId]: { result: m.result, outcome: m.outcome, runs: m.runs } } };
+}
+
+type Seen = { result?: ResultSample; count?: number; runId?: Id };
+/**
+ * A node's result bubble shows for a result that arrived while watched: its run counter (once: runs, load: stats count) grew in the same run,
+ * or a new run is running. Not for an old run loaded when the flow opens, nor for the same counts re-fetched after a reconnect.
+ * A node run alone always has runs 1, so there the result itself is compared.
+ */
+export const freshResult = (prev: Seen, next: Seen, running: boolean, single: boolean) =>
+  !!next.result && (single ? next.result !== prev.result : next.runId === prev.runId ? (next.count ?? 0) > (prev.count ?? 0) : running);
+
+/**
+ * Cable look. Once: the cable of the source's last outcome pin (Start: once the run began). Load: cables of nodes with calls,
+ * OK green while the source has no failures else red, Fail red once it carried a call; animated while the run is running.
+ */
+export function edgeState(e: FlowEdge, run: FlowRunState | null, startId?: Id): { className?: string; animated?: boolean } {
+  const load = run?.load;
+  if (!load) {
+    const on = e.source === startId ? !!run?.path.length : run?.nodes[e.source]?.outcome === e.sourceHandle;
+    return on ? { className: e.sourceHandle === 'ok' ? 'edge-go' : 'edge-stop' } : {};
+  }
+  const s = load.nodes[e.source];
+  const on = e.source === startId ? Object.values(load.nodes).some((n) => n.count) : e.sourceHandle === 'fail' ? !!s?.fail : !!s?.ok;
+  if (!on) return {};
+  return { className: e.sourceHandle === 'fail' || s?.fail ? 'edge-stop' : 'edge-go', animated: run.status === 'running' };
 }

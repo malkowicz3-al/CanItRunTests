@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Box, Code, Group, Loader, Stack, Table, Tabs, Text } from '@mantine/core';
-import type { RunResult, ScriptResult, Timings } from '../../../shared/api';
+import type { ResultSample, ScriptResult, Timings } from '../../../shared/api';
 import { formatMs, formatSize, prettyBody } from '../util';
 import { CodeEditor } from './CodeEditor';
-import { MethodGlyph, Section } from './ui';
+import { MethodGlyph } from './ui';
 
-const statusSignal = (s: number) => (s >= 200 && s < 300 ? 'go' : s >= 300 && s < 400 ? 'caution' : 'stop');
+export const statusSignal = (s: number) => (s >= 200 && s < 300 ? 'go' : s >= 300 && s < 400 ? 'caution' : 'stop');
 const PHASES: [keyof Timings, string][] = [['dns', 'DNS'], ['tcp', 'TCP'], ['tls', 'TLS'], ['ttfb', 'TTFB'], ['transfer', 'Transfer']];
 const LEVEL_SIGNAL: Record<string, string> = { error: 'stop', warn: 'caution' };
 
@@ -58,7 +58,7 @@ function Tests({ scripts }: { scripts: ScriptResult[] }) {
   );
 }
 
-function ConsoleView({ r }: { r: RunResult }) {
+function ConsoleView({ r }: { r: ResultSample }) {
   const logs = [...r.preScripts.flatMap((s) => s.logs.map((l) => ({ ...l, from: 'pre' }))), ...r.testScripts.flatMap((s) => s.logs.map((l) => ({ ...l, from: 'test' })))];
   if (!logs.length) return <Text c="dimmed">No console output.</Text>;
   return (
@@ -73,7 +73,7 @@ function ConsoleView({ r }: { r: RunResult }) {
   );
 }
 
-function SentRequest({ r }: { r: RunResult }) {
+function SentRequest({ r }: { r: ResultSample }) {
   const f = r.finalRequest;
   return (
     <Stack gap="sm">
@@ -99,12 +99,15 @@ function SentRequest({ r }: { r: RunResult }) {
   );
 }
 
-/** Run report: collapsible sections in the Flows inspector, `tabs` in the Requests workbench (body fills the height). */
-export function LastResult({ result, failure, running, tabs }: { result?: RunResult; failure?: string; running: boolean; tabs?: boolean }) {
+/** Run report as tabs; the body fills the height. */
+export function LastResult({ result, failure, running, bodyPath = 'response' }: {
+  result?: ResultSample; failure?: string; running: boolean;
+  bodyPath?: string; // Monaco model of the body: two results shown at once need their own
+}) {
   const [tab, setTab] = useState<string | null>('body'); // kept across runs: LastResult stays mounted
   if (running) return <Group gap="xs"><Loader size="xs" color="caution" /><Text c="dimmed">Running...</Text></Group>;
   if (failure) return <Text className="signal-text" data-signal="stop" ff="monospace" size="xs">{failure}</Text>;
-  if (!result) return <Text c="dimmed">{tabs ? 'Not sent yet. Press Send or Ctrl + Enter.' : 'Not run yet. Press Run node or Ctrl + Enter.'}</Text>;
+  if (!result) return <Text c="dimmed">Not run yet. Press Run node or Ctrl + Enter.</Text>;
   const res = result.response;
   const all = [...result.preScripts, ...result.testScripts];
   const tests = all.flatMap((s) => s.tests);
@@ -126,16 +129,15 @@ export function LastResult({ result, failure, running, tabs }: { result?: RunRes
     {result.error && <Text size="xs" ff="monospace" className="signal-text" data-signal="stop">{result.error.code}: {result.error.message}</Text>}
     {scriptErrors.map(([kind, e], i) => <Text key={i} size="xs" ff="monospace" className="signal-text" data-signal="stop">{kind} script error: {e}</Text>)}
   </>;
-  // separate Monaco model per screen: Requests and the Flows inspector are mounted at the same time
   const bodyView = res?.body ? (
-    <Stack gap={4} h={tabs ? '100%' : undefined}>
+    <Stack gap={4} h="100%">
       {res.truncated && <Text size="xs" className="signal-text" data-signal="caution">Body truncated for display ({formatSize(res.size)} total).</Text>}
-      <Box className="editor-box" h={tabs ? undefined : 320} style={tabs ? { flex: 1, minHeight: 120 } : undefined}><CodeEditor path={tabs ? 'requests/response' : 'response'} readOnly language={body!.language} value={body!.text} /></Box>
+      <Box className="editor-box" style={{ flex: 1, minHeight: 120 }}><CodeEditor path={bodyPath} readOnly language={body!.language} value={body!.text} /></Box>
     </Stack>
   ) : <Text c="dimmed">Empty body.</Text>;
   const parts = {
     body: { title: 'Body', count: res?.body ? formatSize(res.size) : 0, view: bodyView },
-    headers: { title: tabs ? 'Headers' : 'Response headers', count: res ? Object.keys(res.headers).length : 0, view: res ? <HeaderTable headers={res.headers} /> : <Text c="dimmed">No response.</Text> },
+    headers: { title: 'Headers', count: res ? Object.keys(res.headers).length : 0, view: res ? <HeaderTable headers={res.headers} /> : <Text c="dimmed">No response.</Text> },
     tests: { title: 'Tests', count: tests.length ? `${tests.length - failed}/${tests.length}` : 0, view: <Tests scripts={all} /> },
     console: { title: 'Console', count: logCount, view: <ConsoleView r={result} /> },
     timing: { title: 'Timing', count: 0, view: res ? <TimingLine t={res.timings} /> : <Text c="dimmed">No response.</Text> },
@@ -143,31 +145,15 @@ export function LastResult({ result, failure, running, tabs }: { result?: RunRes
   };
   const count = (c: string | number) => (c === 0 ? null : <span className="section-count">{c}</span>);
 
-  if (tabs) {
-    return (
-      <div className="result-tabs">
-        <Stack gap={6}>{summary}</Stack>
-        <Tabs value={tab} onChange={setTab} keepMounted={false} className="pane-tabs">
-          <Tabs.List>
-            {Object.entries(parts).map(([id, p]) => <Tabs.Tab key={id} value={id} rightSection={count(p.count)}>{p.title}</Tabs.Tab>)}
-          </Tabs.List>
-          {Object.entries(parts).map(([id, p]) => <Tabs.Panel key={id} value={id}>{p.view}</Tabs.Panel>)}
-        </Tabs>
-      </div>
-    );
-  }
-  const section = (id: keyof typeof parts, open?: boolean) => <Section title={parts[id].title} count={parts[id].count} defaultOpen={open}>{parts[id].view}</Section>;
   return (
-    <Stack gap="sm">
-      {summary}
-      {res && <TimingLine t={res.timings} />}
-      <div>
-        {section('tests', true)}
-        {section('console')}
-        {section('body', true)}
-        {section('headers')}
-        {section('sent')}
-      </div>
-    </Stack>
+    <div className="result-tabs">
+      <Stack gap={6}>{summary}</Stack>
+      <Tabs value={tab} onChange={setTab} keepMounted={false} className="pane-tabs">
+        <Tabs.List>
+          {Object.entries(parts).map(([id, p]) => <Tabs.Tab key={id} value={id} rightSection={count(p.count)}>{p.title}</Tabs.Tab>)}
+        </Tabs.List>
+        {Object.entries(parts).map(([id, p]) => <Tabs.Panel key={id} value={id}>{p.view}</Tabs.Panel>)}
+      </Tabs>
+    </div>
   );
 }

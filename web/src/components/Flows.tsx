@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { notifications } from '@mantine/notifications';
-import { ActionIcon, Button, Group, Menu, NumberInput, ScrollArea, Text, TextInput, Tooltip, useComputedColorScheme } from '@mantine/core';
+import { ActionIcon, Button, Group, Menu, NumberInput, SegmentedControl, Select, Text, TextInput, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
 import { Background, Controls, ReactFlow, type ReactFlowInstance } from '@xyflow/react';
-import type { FlowRunState } from '../../../shared/api';
+import type { FlowRunState, RunMode } from '../../../shared/api';
 import { FLOW_MAX_NODE_RUNS_CAP, nodeOutcome, validateFlow } from '../../../shared/flow';
 import type { Flow, FlowEdge, FlowNode, Id, RequestItem } from '../../../shared/model';
 import { api, ApiError } from '../api';
 import { notifyError, runEnvironmentId, useApp } from '../context';
-import { addRequestNode, applyRunEvent, connect, fromTrack } from '../flow';
+import { addRequestNode, applyRunEvent, connect, edgeState, fromTrack } from '../flow';
 import { findPath } from '../util';
 import { subscribe } from '../ws';
 import { EnvironmentSelect } from './EnvironmentEditor';
 import { FlowRunContext, nodeTypes } from './FlowNodes';
 import { Inspector } from './Inspector';
-import { EndpointDock, ItemMenu, TICKET_MIME } from './Library';
+import { EndpointDock, TICKET_MIME } from './Library';
+import { LoadProgress, LoadStatsPanel } from './LoadStats';
 import { ConfirmModal, EmptyState, Icons } from './ui';
 
 const FLOW_KEY = 'cirt.flow';
@@ -21,6 +22,16 @@ const TRACK_KEY = 'cirt.track'; // Stage 1 scratch track, migrated once into a f
 // localStorage throws in some privacy modes; the open flow is just not remembered then
 const readFlowId = () => { try { return localStorage.getItem(FLOW_KEY); } catch { return null; } };
 const writeFlowId = (id: string | null) => { try { if (id) localStorage.setItem(FLOW_KEY, id); else localStorage.removeItem(FLOW_KEY); } catch { /* not persisted */ } };
+const RUN_KEY = 'cirt.runConfig';
+type RunConfig = { mode: RunMode; iterations: number; vus: number };
+const DEFAULT_RUN: RunConfig = { mode: 'once', iterations: 10, vus: 1 };
+const intIn = (v: unknown, max: number) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max;
+const readRunConfig = (): RunConfig => {
+  try {
+    const { mode, iterations, vus } = { ...DEFAULT_RUN, ...JSON.parse(localStorage.getItem(RUN_KEY) ?? '{}') } as RunConfig;
+    return ['once', 'iterations', 'loop'].includes(mode) && intIn(iterations, 1e6) && intIn(vus, 200) ? { mode, iterations, vus } : DEFAULT_RUN;
+  } catch { return DEFAULT_RUN; }
+};
 const MISSING = 'This request no longer exists. Remove the node or add the endpoint again.';
 const byName = <T extends { name: string }>(a: T, b: T) => a.name.localeCompare(b.name);
 const FIT = { padding: 0.2, maxZoom: 1 };
@@ -29,9 +40,10 @@ let migrated = false; // StrictMode mounts twice in dev: the track must become o
 // Start cannot be deleted; React Flow reads `deletable`, the server drops it on save
 const lockStart = (f: Flow): Flow => ({ ...f, nodes: f.nodes.map((n) => (n.type === 'start' ? ({ ...n, deletable: false } as FlowNode) : n)) });
 
-export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow: MutableRefObject<(collectionId: Id, requestId: Id) => void> }) {
+export function FlowsScreen() {
   const app = useApp();
   const scheme = useComputedColorScheme('dark');
+  const { setColorScheme } = useMantineColorScheme();
   const [list, setList] = useState<{ id: Id; name: string }[]>([]);
   const [openId, setOpenId] = useState<Id | null>(readFlowId);
   const [flow, setFlowState] = useState<Flow | null>(null);
@@ -42,6 +54,8 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
   const [editName, setEditName] = useState(false);
   const [del, setDel] = useState<{ id: Id; name: string } | null>(null);
   const [split, setSplit] = useState(0.65);
+  const [runConfig, setRunConfigState] = useState(readRunConfig);
+  const [showDock, setShowDock] = useState(false); // endpoints instead of the load stats
   const [rf, setRf] = useState<ReactFlowInstance<FlowNode, FlowEdge>>();
   const fitted = useRef<unknown>(null);
   const flowRef = useRef<Flow | null>(null); // React Flow can send several changes before a re-render
@@ -54,6 +68,11 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
   const mine = useRef<{ runId: Id; flowId: Id; collectionIds: Id[] } | null>(null);
 
   const setFlow = (f: Flow | null) => { flowRef.current = f; setFlowState(f); };
+  const setRunConfig = (c: Partial<RunConfig>) => {
+    const next = { ...runConfig, ...c };
+    setRunConfigState(next);
+    try { localStorage.setItem(RUN_KEY, JSON.stringify(next)); } catch { /* not persisted */ }
+  };
   /** Saves queued after collection saves; with nothing pending it still waits for saves in flight. */
   const flush = () => {
     clearTimeout(timer.current);
@@ -72,8 +91,14 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
     clearTimeout(timer.current);
     timer.current = setTimeout(() => { flush().catch(() => {}); }, 500);
   };
+  /** The flow list shows the name of the open flow from `flow`; this copies it into the list (after a rename). */
+  const syncName = () => {
+    const f = flowRef.current;
+    if (f) setList((l) => l.map((x) => (x.id === f.id ? { ...x, name: f.name } : x)).sort(byName));
+  };
   const open = (id: Id | null) => {
     if (id === openRef.current) return;
+    syncName();
     flush().catch(() => {});
     setFlow(null);
     setRun(null);
@@ -112,12 +137,12 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
 
   useEffect(() => {
     writeFlowId(openId);
-    if (!openId || flowRef.current?.id === openId) return; // a flow created by addToFlow is already in state
+    if (!openId || flowRef.current?.id === openId) return; // a flow created by add is already in state
     let live = true;
     api.getFlow(openId).then((f) => { if (live) setFlow(lockStart(f)); }, (e) => {
       if (!live) return;
-      setOpenId(null);
-      if (!(e instanceof ApiError && e.status === 404)) notifyError(e);
+      if (e instanceof ApiError && e.status === 404) setOpenId(null);
+      else notifyError(e);
     });
     void fetchRun(openId);
     return () => { live = false; };
@@ -132,12 +157,12 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
     return () => window.removeEventListener('pagehide', hide);
   }, []);
 
-  useEffect(() => { // the screen loads hidden (display: none), so the initial fit sees no size
-    if (!active || !rf || fitted.current === rf) return; // fit once per canvas, keep the user's zoom later
+  useEffect(() => {
+    if (!rf || fitted.current === rf) return; // fit once per canvas, keep the user's zoom later
     fitted.current = rf;
     let raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => { void rf.fitView(FIT); }); }); // after the resize observers
     return () => cancelAnimationFrame(raf);
-  }, [active, rf]);
+  }, [rf]);
 
   useEffect(() => subscribe((e) => {
     if (e.type === 'open') { // events sent while disconnected are lost: catch up from the server
@@ -183,7 +208,6 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
     }
     edit((f) => addRequestNode(f, collectionId, requestId, at));
   };
-  addToFlow.current = (c, r) => { void add(c, r); };
   const duplicate = async (id: Id) => {
     try {
       await flush();
@@ -196,6 +220,8 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
       await flush().catch(() => {});
       await app.enqueue(() => api.deleteFlow(id));
       setList((l) => l.filter((x) => x.id !== id));
+      // an edit made while deleting must not bring the flow back (PUT creates it)
+      if (pending.current?.id === id) { clearTimeout(timer.current); pending.current = null; }
       if (id === openRef.current) open(null);
     } catch (e) { notifyError(e); }
   };
@@ -207,8 +233,10 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
     const reqs = f.nodes.flatMap((n) => (n.type === 'request' ? [n.data] : []));
     const overrides = Object.fromEntries(reqs.flatMap((d) => (d.requestId in app.drafts ? [[d.requestId, app.drafts[d.requestId] as RequestItem]] : [])));
     setFailures({});
+    setShowDock(false);
+    const { mode, iterations, vus } = runConfig;
     try {
-      const { runId } = await api.runFlow(f.id, { environmentId: runEnvironmentId(app), overrides });
+      const { runId } = await api.runFlow(f.id, { environmentId: runEnvironmentId(app), overrides, mode, iterations: mode === 'iterations' ? iterations : undefined, vus });
       mine.current = { runId, flowId: f.id, collectionIds: [...new Set(reqs.map((d) => d.collectionId))] };
       void fetchRun(f.id); // flow.done may have come before the reply
     } catch (e) { app.releaseRun(); notifyError(e); }
@@ -221,7 +249,10 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
     try {
       const r = await api.run({ collectionId, requestId: draft.id, environmentId: runEnvironmentId(app), request: draft });
       if (openRef.current === flowId) {
-        setRun((s) => ({ ...(s ?? { runId: '', flowId: flowId ?? '', status: 'done', startedAt: new Date().toISOString(), path: [] }), nodes: { ...s?.nodes, [nodeId]: { result: r, outcome: nodeOutcome(r, continueWhen), runs: 1 } } }));
+        setRun((s) => { // load stats of an earlier run would hide this result and the dock
+          const { load: _, ...base }: FlowRunState = s ?? { runId: '', flowId: flowId ?? '', status: 'done', startedAt: new Date().toISOString(), path: [], nodes: {} };
+          return { ...base, nodes: { ...base.nodes, [nodeId]: { result: r, outcome: nodeOutcome(r, continueWhen), runs: 1 } } };
+        });
       }
       await app.refreshAfterRun(collectionId).catch(() => {}); // only refreshes the UI
     } catch (e) {
@@ -232,22 +263,49 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
   const running = run?.status === 'running';
   const busy = app.busy || running;
   const startId = flow?.nodes.find((n) => n.type === 'start')?.id;
-  // cables leaving a node by the pin of its last outcome show that outcome
-  const edges = useMemo(() => flow?.edges.map((e) => {
-    const s = run?.nodes[e.source];
-    const on = e.source === startId ? !!run?.path.length : s?.outcome === e.sourceHandle;
-    return on ? { ...e, className: e.sourceHandle === 'ok' ? 'edge-go' : 'edge-stop' } : e;
-  }), [flow?.edges, run, startId]);
+  // run changes 10 times a second in a load run: unchanged edges keep their object, so React Flow skips them
+  const edgeCache = useRef(new Map<Id, { src: FlowEdge; out: FlowEdge & ReturnType<typeof edgeState> }>());
+  const edges = useMemo(() => {
+    const prev = edgeCache.current;
+    edgeCache.current = new Map();
+    return flow?.edges.map((e) => {
+      const s = edgeState(e, run, startId);
+      if (!s.className) return e;
+      const p = prev.get(e.id);
+      const out = p && p.src === e && p.out.className === s.className && p.out.animated === s.animated ? p.out : { ...e, ...s };
+      edgeCache.current.set(e.id, { src: e, out });
+      return out;
+    });
+  }, [flow?.edges, run, startId]);
+  const runView = useMemo(() => ({ run, single, failures }), [run, single, failures]);
+  const flowOptions = useMemo(() => list.map((x) => ({ value: x.id, label: x.id === flow?.id ? flow.name : x.name })), [list, flow?.id, flow?.name]);
 
+  const requestNames = (flow?.nodes ?? []).flatMap((n) => {
+    if (n.type !== 'request') return [];
+    const c = app.collections.find((x) => x.id === n.data.collectionId);
+    return [{ id: n.id, name: (c && findPath(c.items, n.data.requestId).at(-1)?.name) ?? 'Missing request' }];
+  });
   const sel = flow?.nodes.find((n) => n.id === selected);
   const selData = sel?.type === 'request' ? sel.data : undefined;
   const selCollection = selData && app.collections.find((c) => c.id === selData.collectionId);
-  const selPath = selCollection && selData ? findPath(selCollection.items, selData.requestId) : [];
+  const selPath = useMemo(() => (selCollection && selData ? findPath(selCollection.items, selData.requestId) : []), [selCollection, selData]);
   const selRequest = selPath.at(-1)?.kind === 'request' ? selPath.at(-1) : undefined;
   const removeNode = (id: Id) => {
     edit((f) => ({ ...f, nodes: f.nodes.filter((n) => n.id !== id), edges: f.edges.filter((e) => e.source !== id && e.target !== id) }));
     setSelected(null);
   };
+  // stable callbacks, so the memoized Inspector skips the 10 renders a second of a load run
+  const latest = useRef({ edit, runNode, sel, selData });
+  latest.current = { edit, runNode, sel, selData };
+  const onContinueWhen = useCallback((continueWhen: number[]) => {
+    const { edit, sel } = latest.current;
+    if (sel) edit((f) => ({ ...f, nodes: f.nodes.map((n) => (n.id === sel.id && n.type === 'request' ? { ...n, data: { ...n.data, continueWhen } } : n)) }));
+  }, []);
+  const onRunNode = useCallback((draft: RequestItem) => {
+    const { runNode, sel, selData } = latest.current;
+    if (sel && selData) void runNode(sel.id, selData.collectionId, draft, selData.continueWhen);
+  }, []);
+  const closeInspector = useCallback(() => setSelected(null), []);
 
   const onDrop = (e: React.DragEvent) => {
     const ticket = e.dataTransfer.getData(TICKET_MIME);
@@ -258,6 +316,12 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
       if (typeof collectionId === 'string' && typeof requestId === 'string') void add(collectionId, requestId, rf?.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
     } catch { /* not our ticket */ }
   };
+  const panelTabs = (
+    <SegmentedControl
+      size="xs" aria-label="Bottom panel" value={run?.load && !showDock ? 'load' : 'endpoints'} onChange={(v) => setShowDock(v === 'endpoints')}
+      data={[{ value: 'endpoints', label: 'Endpoints' }, { value: 'load', label: 'Load stats', disabled: !run?.load }]}
+    />
+  );
   const drag = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!(e.buttons & 1)) return;
     const r = e.currentTarget.parentElement!.getBoundingClientRect();
@@ -267,51 +331,44 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
   return (
     <div className="track-screen">
       <div className="track-body">
-        <aside className="tree-pane flow-list" aria-label="Flows">
-          <Group className="tree-head" gap={4} wrap="nowrap">
-            <Text fw={600} style={{ flex: 1 }}>Flows</Text>
-            <Tooltip label="New flow" openDelay={300}>
-              <ActionIcon variant="subtle" color="gray" aria-label="New flow" onClick={() => { create('New flow').then((f) => open(f.id), notifyError); }}>{Icons.plus()}</ActionIcon>
-            </Tooltip>
-          </Group>
-          <ScrollArea style={{ flex: 1 }} type="hover">
-            <div className="tree">
-              {!list.length && <Text size="xs" c="dimmed" px="md">No flows yet.</Text>}
-              {list.map((x) => {
-                const name = x.id === flow?.id ? flow.name : x.name;
-                return (
-                  <ItemMenu key={x.id} label={name} className="tree-row" menu={<>
-                    <Menu.Item onClick={() => { open(x.id); setEditName(true); }}>Rename</Menu.Item>
-                    <Menu.Item onClick={() => { void duplicate(x.id); }}>Duplicate</Menu.Item>
-                    <Menu.Divider />
-                    <Menu.Item color="stop" onClick={() => setDel({ id: x.id, name })}>Delete</Menu.Item>
-                  </>}>
-                    <button type="button" className="tree-main" style={{ paddingLeft: 16 }} aria-current={x.id === openId || undefined} onClick={() => open(x.id)}>
-                      <span className="tree-name">{name}</span>
-                    </button>
-                  </ItemMenu>
-                );
-              })}
-            </div>
-          </ScrollArea>
-        </aside>
         <div className="track-column">
           <header className="topbar">
-            <Group gap={6} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-              {flow && (editName ? (
+            <Group gap="sm">
+              {flow && editName ? (
                 <TextInput
-                  autoFocus variant="unstyled" size="lg" fw={600} value={flow.name} aria-label="Flow name"
+                  autoFocus w={260} value={flow.name} aria-label="Flow name"
                   onChange={(e) => { const name = e.currentTarget.value; edit((f) => ({ ...f, name })); }}
-                  onBlur={() => { setEditName(false); if (!flow.name.trim()) edit((f) => ({ ...f, name: 'Untitled flow' })); }}
+                  onBlur={() => { setEditName(false); if (!flow.name.trim()) edit((f) => ({ ...f, name: 'Untitled flow' })); syncName(); }}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
                 />
               ) : (
-                <button type="button" className="track-name" onClick={() => setEditName(true)} aria-label="Rename flow">
-                  <span>{flow.name}</span>{Icons.edit()}
-                </button>
-              ))}
+                <Select
+                  w={260} searchable allowDeselect={false} aria-label="Flow" placeholder={list.length ? 'Pick a flow' : 'No flows yet'} disabled={!list.length}
+                  nothingFoundMessage="No flow matches" value={openId} onChange={(id) => { if (id) open(id); }}
+                  data={flowOptions}
+                />
+              )}
+              <Button variant="default" leftSection={Icons.plus()} onClick={() => { create('New flow').then((f) => open(f.id), notifyError); }}>New flow</Button>
+              {flow && (
+                <Menu position="bottom-start">
+                  <Menu.Target>
+                    <ActionIcon variant="subtle" color="gray" aria-label="Flow actions">{Icons.dots()}</ActionIcon>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Item onClick={() => setEditName(true)}>Rename</Menu.Item>
+                    <Menu.Item onClick={() => { void duplicate(flow.id); }}>Duplicate</Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item color="stop" onClick={() => setDel({ id: flow.id, name: flow.name })}>Delete</Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
+              )}
+              <Tooltip label={scheme === 'dark' ? 'Light theme' : 'Dark theme'} openDelay={300}>
+                <ActionIcon variant="subtle" color="gray" ml="auto" aria-label={scheme === 'dark' ? 'Light theme' : 'Dark theme'} onClick={() => setColorScheme(scheme === 'dark' ? 'light' : 'dark')}>
+                  {scheme === 'dark' ? Icons.sun() : Icons.moon()}
+                </ActionIcon>
+              </Tooltip>
             </Group>
-            <Group gap="sm" wrap="nowrap">
+            <Group gap="sm">
               <EnvironmentSelect />
               {flow && <>
                 <Group gap={6} wrap="nowrap">
@@ -322,9 +379,32 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
                     onChange={(v) => edit((f) => ({ ...f, maxNodeRuns: typeof v === 'number' && v >= 1 ? v : undefined }))}
                   />
                 </Group>
+                <SegmentedControl
+                  size="xs" disabled={running} aria-label="Run mode" value={runConfig.mode} onChange={(v) => setRunConfig({ mode: v as RunMode })}
+                  data={[{ value: 'once', label: 'Once' }, { value: 'iterations', label: 'Iterations' }, { value: 'loop', label: 'Loop' }]}
+                />
+                {runConfig.mode === 'iterations' && (
+                  <Group gap={6} wrap="nowrap">
+                    <Text size="xs" c="dimmed">Iterations / worker</Text>
+                    <NumberInput
+                      size="xs" w={90} min={1} max={1e6} allowDecimal={false} allowNegative={false} clampBehavior="strict" disabled={running}
+                      aria-label="Iterations per worker" value={runConfig.iterations} onChange={(v) => { if (typeof v === 'number' && v >= 1) setRunConfig({ iterations: v }); }}
+                    />
+                  </Group>
+                )}
+                <Group gap={6} wrap="nowrap">
+                  <Text size="xs" c="dimmed">Workers</Text>
+                  <NumberInput
+                    size="xs" w={70} min={1} max={200} allowDecimal={false} allowNegative={false} clampBehavior="strict" disabled={running}
+                    aria-label="Workers" value={runConfig.vus} onChange={(v) => { if (typeof v === 'number' && v >= 1) setRunConfig({ vus: v }); }}
+                  />
+                  {runConfig.mode === 'iterations' && <Text size="xs" c="dimmed">= {runConfig.iterations * runConfig.vus} runs</Text>}
+                  {runConfig.mode === 'once' && runConfig.vus > 1 && <Text size="xs" c="dimmed">= {runConfig.vus} runs</Text>}
+                </Group>
+                {(runConfig.mode !== 'once' || runConfig.vus > 1) && <Text size="xs" c="dimmed">Variables are not saved back in load runs.</Text>}
                 {running
-                  ? <Button color="stop" leftSection={Icons.close()} onClick={() => { api.cancelFlow(flow.id).catch(notifyError); }}>Cancel</Button>
-                  : <Button leftSection={Icons.play()} onClick={() => { void runFlow(); }} disabled={busy}>Run flow</Button>}
+                  ? <Button color="stop" ml="auto" leftSection={Icons.close()} onClick={() => { api.cancelFlow(flow.id).catch(notifyError); }}>Stop</Button>
+                  : <Button ml="auto" leftSection={Icons.play()} onClick={() => { void runFlow(); }} disabled={busy}>Run</Button>}
               </>}
             </Group>
           </header>
@@ -332,8 +412,9 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
             className="flow-canvas" style={{ flex: `0 0 ${split * 100}%` }}
             onDragOver={(e) => { if (e.dataTransfer.types.includes(TICKET_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }} onDrop={onDrop}
           >
+            {run?.status === 'running' && run.load && <LoadProgress load={run.load} />}
             {flow ? (
-              <FlowRunContext.Provider value={{ run, single, failures }}>
+              <FlowRunContext.Provider value={runView}>
                 <ReactFlow<FlowNode, FlowEdge>
                   key={flow.id} nodes={flow.nodes} edges={edges} nodeTypes={nodeTypes} forceColorMode={scheme} fitView fitViewOptions={FIT}
                   deleteKeyCode={['Backspace', 'Delete']} onInit={setRf}
@@ -366,21 +447,24 @@ export function FlowsScreen({ active, addToFlow }: { active: boolean; addToFlow:
             )}
           </div>
           <div
-            className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize endpoint dock" tabIndex={0}
+            className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize bottom panel" tabIndex={0}
             aria-valuenow={Math.round(split * 100)} aria-valuemin={20} aria-valuemax={85}
             onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)} onPointerMove={drag}
             onKeyDown={(e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setSplit((s) => Math.min(0.85, Math.max(0.2, s + (e.key === 'ArrowUp' ? -0.05 : 0.05)))); } }}
           />
-          <div style={{ flex: 1, minHeight: 0 }}><EndpointDock onAdd={(c, r) => { void add(c, r); }} /></div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {run?.load && !showDock
+              ? <LoadStatsPanel flowId={run.flowId} runId={run.runId} load={run.load} status={run.status} error={run.error} nodes={requestNames} tabs={panelTabs} onExpand={() => setSplit((s) => Math.min(s, 0.4))} />
+              : <EndpointDock tabs={panelTabs} onAdd={(c, r) => { void add(c, r); }} />}
+          </div>
         </div>
         {sel && selData && selCollection && selRequest && (
           <Inspector
-            key={sel.id} collection={selCollection} path={selPath} result={run?.nodes[sel.id]?.result} failure={failures[sel.id]}
-            running={single === sel.id || (running && run?.currentNodeId === sel.id)} busy={busy} active={active && !del}
+            key={sel.id} collection={selCollection} path={selPath} result={run?.nodes[sel.id]?.result ?? run?.load?.nodes[sel.id]?.last} failure={failures[sel.id]}
+            lastError={run?.load?.nodes[sel.id]?.lastError} frozen={running && !!run?.load}
+            running={single === sel.id || (running && run?.currentNodeId === sel.id)} busy={busy} active={!del}
             continueWhen={selData.continueWhen}
-            onContinueWhen={(continueWhen) => edit((f) => ({ ...f, nodes: f.nodes.map((n) => (n.id === sel.id && n.type === 'request' ? { ...n, data: { ...n.data, continueWhen } } : n)) }))}
-            onRun={(draft) => { void runNode(sel.id, selData.collectionId, draft, selData.continueWhen); }}
-            onClose={() => setSelected(null)}
+            onContinueWhen={onContinueWhen} onRun={onRunNode} onClose={closeInspector}
           />
         )}
         {sel && selData && !selRequest && (

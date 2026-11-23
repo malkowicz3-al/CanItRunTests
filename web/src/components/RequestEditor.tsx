@@ -8,14 +8,12 @@ import { CodeEditor } from './CodeEditor';
 import { MethodGlyph } from './ui';
 import { VariablesTable } from './VariablesTable';
 
-// Field editors of a request, shared by the Flows inspector (sections) and the Requests workbench (tabs).
+// Field editors of a request, shown as sections in the Flows inspector.
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const mono = { input: { fontFamily: 'var(--mantine-font-family-monospace)' } };
 
 type Edit = { draft: RequestItem; set: (patch: Partial<RequestItem>) => void };
-/** `scope` keeps Monaco model paths apart: Requests and the Flows inspector can show the same request at once. */
-type FieldsProps = Edit & { scope: 'requests' | 'flows' };
 
 /** Draft of a saved request plus its save action; `active` = the screen is visible (hotkeys of hidden screens do nothing). */
 export function useRequestDraft(collection: Collection, saved: RequestItem, active: boolean) {
@@ -131,7 +129,7 @@ export function RequestLine({ draft, set, collection, action }: Edit & { collect
   );
 }
 
-function QueryPathFields({ draft, set }: FieldsProps) {
+function QueryPathFields({ draft, set }: Edit) {
   return (
     <Stack gap="sm">
       <VariablesTable rows={parseQuery(draft.url)} toggle={false} onChange={(q) => set({ url: withQuery(draft.url, q) })} />
@@ -143,22 +141,22 @@ function QueryPathFields({ draft, set }: FieldsProps) {
   );
 }
 
-const HeadersFields = ({ draft, set }: FieldsProps) => <VariablesTable rows={draft.headers} onChange={(headers) => set({ headers })} />;
-const BodyFields = ({ draft, set, scope }: FieldsProps) => <BodyEditor key={draft.id} path={`${scope}/${draft.id}/body`} body={draft.body} onChange={(body) => set({ body })} />;
-const AuthFields = ({ draft, set }: FieldsProps) => <AuthEditor auth={draft.auth} onChange={(auth) => set({ auth })} />;
+const HeadersFields = ({ draft, set }: Edit) => <VariablesTable rows={draft.headers} onChange={(headers) => set({ headers })} />;
+const BodyFields = ({ draft, set }: Edit) => <BodyEditor key={draft.id} path={`${draft.id}/body`} body={draft.body} onChange={(body) => set({ body })} />;
+const AuthFields = ({ draft, set }: Edit) => <AuthEditor auth={draft.auth} onChange={(auth) => set({ auth })} />;
 
-function ScriptsFields({ draft, set, scope }: FieldsProps) {
+function ScriptsFields({ draft, set }: Edit) {
   return (
     <Stack gap="xs">
       <Text size="xs" c="dimmed">Pre-request</Text>
-      <Box className="editor-box" h={200}><CodeEditor path={`${scope}/${draft.id}/pre.js`} language="javascript" value={draft.scripts.pre} onChange={(pre) => set({ scripts: { ...draft.scripts, pre } })} /></Box>
+      <Box className="editor-box" h={200}><CodeEditor path={`${draft.id}/pre.js`} language="javascript" value={draft.scripts.pre} onChange={(pre) => set({ scripts: { ...draft.scripts, pre } })} /></Box>
       <Text size="xs" c="dimmed">Tests</Text>
-      <Box className="editor-box" h={200}><CodeEditor path={`${scope}/${draft.id}/test.js`} language="javascript" value={draft.scripts.test} onChange={(test) => set({ scripts: { ...draft.scripts, test } })} /></Box>
+      <Box className="editor-box" h={200}><CodeEditor path={`${draft.id}/test.js`} language="javascript" value={draft.scripts.test} onChange={(test) => set({ scripts: { ...draft.scripts, test } })} /></Box>
     </Stack>
   );
 }
 
-function SettingsFields({ draft, set }: FieldsProps) {
+function SettingsFields({ draft, set }: Edit) {
   return (
     <Stack gap={6}>
       <Text fw={500}>Follow redirects</Text>
@@ -174,10 +172,10 @@ function SettingsFields({ draft, set }: FieldsProps) {
 
 /** The editable parts in display order, with the counter shown next to each title (0 = no counter). */
 export const REQUEST_PARTS = [
-  { id: 'params', title: 'Params', sectionTitle: 'Query & path', Fields: QueryPathFields },
-  { id: 'headers', title: 'Headers', sectionTitle: 'Headers', Fields: HeadersFields },
-  { id: 'body', title: 'Body', sectionTitle: 'Body', Fields: BodyFields },
-  { id: 'auth', title: 'Auth', sectionTitle: 'Auth', Fields: AuthFields },
-  { id: 'scripts', title: 'Scripts', sectionTitle: 'Scripts', Fields: ScriptsFields },
-  { id: 'settings', title: 'Settings', sectionTitle: 'Settings', Fields: SettingsFields },
+  { id: 'params', sectionTitle: 'Query & path', Fields: QueryPathFields },
+  { id: 'headers', sectionTitle: 'Headers', Fields: HeadersFields },
+  { id: 'body', sectionTitle: 'Body', Fields: BodyFields },
+  { id: 'auth', sectionTitle: 'Auth', Fields: AuthFields },
+  { id: 'scripts', sectionTitle: 'Scripts', Fields: ScriptsFields },
+  { id: 'settings', sectionTitle: 'Settings', Fields: SettingsFields },
 ] as const;

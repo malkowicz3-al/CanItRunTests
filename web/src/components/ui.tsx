@@ -21,8 +21,6 @@ export const Icons = {
   close: () => svg(<path d="M6 6l12 12M18 6L6 18" />, 14),
   edit: () => svg(<path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4" />, 14),
   search: () => svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>, 14),
-  requests: () => svg(<><path d="M4 5h4M4 12h4M4 19h4" /><path d="M11 5h9M11 12h9M11 19h9" /></>, 20),
-  track: () => svg(<><path d="M2 12h20" /><circle cx="6" cy="12" r="2.5" fill="currentColor" /><circle cx="18" cy="12" r="2.5" /></>, 20),
 };
 
 /** Counter next to a tab or section title; 0 or undefined shows nothing. */

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Collection, RequestItem } from '../../shared/model';
-import { createRunLock, libraryGroups, resolveVar, treeRows } from './track';
+import { createRunLock, libraryGroups, resolveVar } from './track';
 
 test('library groups and variable lookup', () => {
   const req = (id: string, method = 'GET'): RequestItem => ({ kind: 'request', id, name: id, method, url: `{{host}}/${id}`, pathVariables: [], headers: [], body: { mode: 'none' }, auth: { type: 'inherit' }, scripts: { pre: '', test: '' } });
@@ -10,12 +10,6 @@ test('library groups and variable lookup', () => {
   };
   expect(libraryGroups([c], '').map((g) => [g.folders.map((f) => f.name), g.requests.map((r) => r.id)])).toEqual([[[], ['top']], [['F'], ['inner']]]);
   expect(libraryGroups([{ ...c, items: [] }], '').map((g) => g.requests)).toEqual([[]]);
-  const rows = (q: string, collapsed: string[] = []) => treeRows([c], q, new Set(collapsed)).map((r) => `${r.depth}:${r.item?.id ?? r.collection.id}`);
-  expect(rows('')).toEqual(['0:c', '1:top', '1:f', '2:inner']);
-  expect(rows('', ['f'])).toEqual(['0:c', '1:top', '1:f']);
-  expect(rows('', ['c'])).toEqual(['0:c']);
-  expect(rows('post', ['c', 'f'])).toEqual(['0:c', '1:f', '2:inner']); // a query ignores collapsing
-  expect(rows('nothing')).toEqual([]);
   expect(libraryGroups([c], 'post').map((g) => g.requests.map((r) => r.id))).toEqual([['inner']]);
   const env = { id: 'e', name: 'E', ignoreTls: false, followRedirects: true, values: [{ key: 'host', value: 'env', enabled: false }] };
   expect(resolveVar('host', env, c, { values: [] })?.value).toBe('col');

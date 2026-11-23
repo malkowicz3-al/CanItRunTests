@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActionIcon, Drawer, Tooltip, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Drawer } from '@mantine/core';
 import type { Collection, Environment, Globals, Id } from '../../shared/model';
 import { api } from './api';
 import { EnvironmentsView } from './components/EnvironmentEditor';
 import { ImportDialog } from './components/ImportDialog';
 import { FlowsScreen } from './components/Flows';
-import { RequestsScreen } from './components/Requests';
-import { Icons } from './components/ui';
-import { AppContext, notifyError, SCREENS, type AppData, type Screen } from './context';
+import { AppContext, notifyError, type AppData } from './context';
 import { createRunLock } from './track';
 import { itemIds } from './util';
 
@@ -15,26 +13,12 @@ const ENV_KEY = 'cirt.activeEnvironment';
 // localStorage throws in some privacy modes; the selection is just not remembered then
 const readEnvId = () => { try { return localStorage.getItem(ENV_KEY); } catch { return null; } };
 const writeEnvId = (id: string | null) => { try { if (id) localStorage.setItem(ENV_KEY, id); else localStorage.removeItem(ENV_KEY); } catch { /* not persisted */ } };
-const SCREEN_KEY = 'cirt.screen';
-const readScreen = (): Screen => { try { return SCREENS.find((s) => s === localStorage.getItem(SCREEN_KEY)) ?? 'requests'; } catch { return 'requests'; } };
-
-function RailButton({ label, icon, active, onClick }: { label: string; icon: ReactNode; active?: boolean; onClick: () => void }) {
-  return (
-    <Tooltip label={label} position="right" openDelay={200}>
-      <ActionIcon
-        variant="subtle" color="gray" size={40} className="rail-button" data-active={active || undefined}
-        aria-label={label} aria-current={active ? 'page' : undefined} onClick={onClick}
-      >{icon}</ActionIcon>
-    </Tooltip>
-  );
-}
 
 export function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [globals, setGlobals] = useState<Globals>({ values: [] });
   const [activeEnvId, setActiveEnv] = useState<Id | null>(readEnvId);
-  const [screen, setScreen] = useState<Screen>(readScreen);
   const [envSelection, setEnvSelection] = useState<string | null>(null);
   const [envOpen, setEnvOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
@@ -45,9 +29,6 @@ export function App() {
   latestCollections.current = collections;
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const forgetters = useRef(new Set<(ids: Id[]) => void>());
-  const addToFlow = useRef<(collectionId: Id, requestId: Id) => void>(() => {}); // set by the Flows screen, which owns the open flow
-  const { setColorScheme } = useMantineColorScheme();
-  const scheme = useComputedColorScheme('dark');
 
   const byName = <T extends { name: string }>(a: T, b: T) => a.name.localeCompare(b.name);
   // saves, refreshes and deletes of collections run one at a time, so a refresh fetched before a save cannot undo it
@@ -69,7 +50,6 @@ export function App() {
   }, []);
   const reload = useCallback(() => enqueue(load), [enqueue, load]); // never call reload from inside an enqueued step: it would wait for itself
   useEffect(() => { reload().catch(notifyError); }, [reload]);
-  useEffect(() => { try { localStorage.setItem(SCREEN_KEY, screen); } catch { /* not persisted */ } }, [screen]);
 
   const hasDrafts = Object.keys(drafts).length > 0;
   useEffect(() => {
@@ -87,11 +67,10 @@ export function App() {
     return rest;
   });
   const ctx: AppData = {
-    collections, environments, globals, drafts, setDraft, discardDraft, screen, setScreen, envSelection,
+    collections, environments, globals, drafts, setDraft, discardDraft, envSelection,
     activeEnvId,
     setActiveEnvId: (id) => { setActiveEnv(id); writeEnvId(id); },
     editEnvironment: (id) => { setEnvSelection(id); if (id) setEnvOpen(true); },
-    addToFlow: (collectionId, requestId) => addToFlow.current(collectionId, requestId),
     reload,
     refreshAfterRun: (collectionId) => enqueue(async () => {
       const [c, envs, g] = await Promise.all([api.getCollection(collectionId), api.listEnvironments(), api.getGlobals()]);
@@ -126,20 +105,8 @@ export function App() {
   return (
     <AppContext.Provider value={ctx}>
       <div className="app">
-        <nav className="rail" aria-label="Main">
-          <RailButton label="Endpoints" icon={Icons.requests()} active={screen === 'requests'} onClick={() => setScreen('requests')} />
-          <RailButton label="Flows" icon={Icons.track()} active={screen === 'flows'} onClick={() => setScreen('flows')} />
-          <div style={{ flex: 1 }} />
-          <RailButton label={scheme === 'dark' ? 'Light theme' : 'Dark theme'} icon={scheme === 'dark' ? Icons.sun() : Icons.moon()} onClick={() => setColorScheme(scheme === 'dark' ? 'light' : 'dark')} />
-        </nav>
         <main className="screen">
-          {/* both work screens stay mounted on other screens so runs in progress and their results survive */}
-          <div style={{ display: screen === 'requests' ? 'contents' : 'none' }}>
-            <RequestsScreen active={screen === 'requests'} />
-          </div>
-          <div style={{ display: screen === 'flows' ? 'contents' : 'none' }}>
-            <FlowsScreen active={screen === 'flows'} addToFlow={addToFlow} />
-          </div>
+          <FlowsScreen />
         </main>
       </div>
       <Drawer

@@ -1,4 +1,4 @@
-import type { FlowRunState, ImportResult, RunFlowBody, RunRequestBody, RunResult } from '../../shared/api';
+import type { FlowRunState, ImportResult, LoadCalls, ResultSample, RunFlowBody, RunRequestBody, RunResult } from '../../shared/api';
 import type { Collection, Environment, Flow, Globals, Id } from '../../shared/model';
 
 export class ApiError extends Error {
@@ -40,4 +40,6 @@ export const api = {
   runFlow: (id: Id, b: RunFlowBody) => call<{ runId: Id }>('POST', `/api/flows/${id}/run`, b),
   cancelFlow: (id: Id) => call<void>('POST', `/api/flows/${id}/cancel`),
   getFlowRun: (id: Id) => call<FlowRunState>('GET', `/api/flows/${id}/run`),
+  getLoadCalls: (id: Id, runId: Id, node: Id, filter: 'all' | 'failed') => call<LoadCalls>('GET', `/api/flows/${id}/run/calls?runId=${encodeURIComponent(runId)}&node=${encodeURIComponent(node)}&filter=${filter}`),
+  getLoadCall: (id: Id, runId: Id, seq: number) => call<ResultSample>('GET', `/api/flows/${id}/run/calls/${seq}?runId=${encodeURIComponent(runId)}`),
 };

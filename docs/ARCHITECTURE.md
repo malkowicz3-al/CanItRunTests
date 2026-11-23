@@ -197,7 +197,7 @@ execute(req: PreparedRequest, opts: { ignoreTls: boolean; clientCert?: {cert,key
 //   timings: { dns, tcp, tls, ttfb, transfer, total } w ms, albo error: { code: 'ETIMEDOUT'|'ECONNREFUSED'|..., message }
 ```
 - Timingi z `socket` events: `lookup`, `connect`, `secureConnect`, `response`, `end` (`performance.now()`). Przy reużytym sockecie DNS/TCP/TLS = 0.
-- Pojedynczy strzał: bez keep-alive (zawsze pełne rozbicie czasu). Load: `Agent({ keepAlive: true })` per worker.
+- Pojedynczy strzał: bez keep-alive (zawsze pełne rozbicie czasu). Load: `HttpOptions.agents = { http, https }` z `keepAlive: true`, jedna para per worker; na ponownie użytym gnieździe dns/tcp/tls = 0.
 - TLS: `rejectUnauthorized: !ignoreTls`; mTLS: `cert`/`key`/`passphrase`/`ca` jako PEM ze zmiennych (po `resolve`).
 - Dekompresja gzip/br/deflate przez `node:zlib`. Limit body odpowiedzi w wyniku dla GUI (np. 10 MB, potem obcięcie z flagą).
 - Domyślny timeout HTTP w `config.ts` (np. 30 s) — potrzebny też jako typ błędu „timeout” w raportach load.
@@ -213,14 +213,12 @@ Kroki: pre-skrypty → `prepare` → `execute` → test-skrypty. `override` = ni
 ### runPool.ts (główny wątek)
 Jeden stały `Worker(dist/worker.cjs, { workerData: { role: 'run' } })`, zadania `{ jobId, input }`, wiele równoległych. Hard-timeout po stronie głównej (5 s × liczba skryptów + timeout HTTP + margines): `terminate()` i respawn przy następnym zadaniu — obsługuje pętlę nieskończoną po `await`, której `vm` nie przerwie. Po zakończeniu główny wątek zapisuje zmienione `environment`, `collection.variables`, `globals` (porównanie z wejściem, zapis tylko zmienionych). Zadania flow (etap 2) — sekcja 10.3.
 
-### Etap 3: load/engine.ts + worker 'load' + core/stats.ts
-- `W = min(os.availableParallelism() - 1, 4)` workerów (co najmniej 1); VU rozdzielone równo; każdy VU to pętla `runFlow` ze `structuredClone` scopes na start VU (nic nie wraca do environment) — styk opisany w sekcji 10.4.
-- Limit RPS: token bucket per worker z `rps / W` (shortcut: równy podział, przy `rps < 100` używamy W=1, żeby nie zaokrąglać do zera).
-- Ramp-up: start VU liniowo w `rampUpSec`.
-- Worker co 1 s wysyła `tick`: per węzeł histogram latencji + liczniki statusów/typów błędów + nowe próbki błędów (max 5 na typ). Główny wątek scala, broadcastuje przez WS, na końcu zapisuje `reports/<id>.json`.
-- `stats.ts`: histogram o stałych kubełkach logarytmicznych (~1% błędu), scalany sumowaniem — percentyle min/avg/p50/p90/p95/p99/max bez trzymania wszystkich próbek (1000 RPS × 30 min). Własne ~50 linii + test, bez zależności.
-- Blokada: `let current: LoadRun | undefined` w engine; `POST /api/load` przy trwającym → 409 `{ runningId }`. Stop: `postMessage('stop')`, po 2 s `terminate()`. Limity (200 VU / 2000 RPS / 30 min) z `config.ts`, walidowane na wejściu.
-- Eksport HTML: serwer renderuje samodzielny plik (szablon string + tabelki + inline SVG wykresów z timeline); JSON = plik raportu.
+### Etap 3: loadRun.ts + worker 'load' + shared/stats.ts — patrz [ADR 0006](adr/0006-load-runs-in-flow-endpoint.md)
+- Brak osobnego API: `POST /api/flows/:id/run` z `mode` ≠ `'once'` albo `vus` > 1 idzie ścieżką load (`server/flows.ts` → `startLoad`). Bez zapisu zmiennych.
+- `loadRun.ts`: `startLoad(input, { vus, iterations? }, workerFile, onTick) → { done: Promise<FlowStatus>, stop(), totals }`. `W = min(vus, availableParallelism() - 1, 4)` (co najmniej 1) wątków `worker.cjs` z `workerData: { role: 'load', input, vus, firstVu, iterations }`; VU rozdzielone równo, `iterations` per VU. Pierścienie wywołań per węzeł w `totals.calls` (200 ostatnich, 100 ostatnich błędnych, `seq` nadawany tutaj). Scala delty, co 1 s woła `onTick` ze skumulowanym stanem, na końcu jeszcze raz. Watchdog 15 s bez ticku → błąd; po `MAX_DURATION_MIN` Stop ze statusem `limit`.
+- `worker.ts` rola `load`: VU = pętla `runFlow` z własnym `structuredClone(scopes)`, `runtime = {}` co iterację, każdy VU robi `iterations` iteracji, `setImmediate` między iteracjami (pusty flow nie zagłodzi timera). Co 1 s `LoadTick { iterations, nodes: Record<nodeId, NodeStats>, calls: Record<nodeId, TickCall[]>, done? }` z deltami (calls: najnowsze 50 i najnowsze 50 błędnych wywołań węzła z próbką ≤ 16 KB); `stop` = abort `signal`, końcowy tick z `done: true`, główny wątek robi `terminate()` (najpóźniej po `SCRIPT_TIMEOUT_MS + 1 s`).
+- `shared/stats.ts` (wspólny z przeglądarką): `emptyStats`, `record`, `merge`, `percentile`, `summary`. Histogram: kubełki logarytmiczne co 2% od 0,01 ms (`Record<index, count>`), percentyl = środek geometryczny kubełka przycięty do min/max (błąd ≤ 1%).
+- Raport: `FlowRunState.load` w `lastRuns` i `reports/<runId>.json`. Limity w `config.ts`: `MAX_VUS = 200`, `MAX_ITERATIONS = 1e6` per VU i `MAX_TOTAL_ITERATIONS = 1e7` (400), `MAX_DURATION_MIN = 30`.
 
 ## 6. API
 
@@ -239,10 +237,10 @@ Wszystko pod `/api`, JSON. Fastify `bodyLimit` podniesiony do 50 MB (kolekcje z 
 | `GET /api/health` | do smoke testu |
 
 **Etap 2:** trasy flow i zdarzenia WS — sekcja 10.5.
-**Etap 3:** `POST /api/load` (config) → `{ id }` / 409, `POST /api/load/:id/stop`, `GET /api/load/current`, `GET /api/reports`, `GET /api/reports/:id`, `GET /api/reports/:id/export?format=html|json`.
+**Etap 3:** `POST /api/flows/:id/run` dostaje `mode`/`iterations`/`vus` (sekcja 10.5, ADR 0006); lista wywołań ostatniego przebiegu load: `GET /api/flows/:id/run/calls?node=&filter=all|failed&runId=` i `GET /api/flows/:id/run/calls/:seq?runId=`. Trasy raportów odłożone.
 **Etap 4:** `POST /api/import/openapi` `{ url } | spec` → kolekcja jak import Postmana.
 
-**WebSocket `/ws`** (od etapu 2): serwer → klient, `{ type: 'flow.*' | 'load.tick' | 'load.done', ... }`; klient tylko słucha, sterowanie zawsze przez REST. Szczegóły w sekcji 10.5–10.6.
+**WebSocket `/ws`** (od etapu 2): serwer → klient, `{ type: 'flow.*', ... }` (load: `flow.stats`); klient tylko słucha, sterowanie zawsze przez REST. Szczegóły w sekcji 10.5–10.6.
 
 **Bezpieczeństwo:** brak logowania jest decyzją produktową, ale przy domyślnym `HOST=localhost` hook `onRequest` odrzuca żądania z nagłówkiem `Host` innym niż `localhost:PORT`/`127.0.0.1:PORT` (DNS rebinding — strona z internetu mogłaby inaczej czytać sekrety i strzelać z sieci firmowej). Bez CORS. Fastify odrzuca nie-JSON content-type (blokuje proste CSRF z formularzy). `/ws` dodatkowo sprawdza `Origin` (sekcja 10.6).
 
@@ -266,15 +264,15 @@ web/src/
     ResponseView.tsx (LastResult: status, czasy, testy, konsola, body, nagłówki, sent request; sekcje w inspektorze, `tabs` w Requests)
     Library.tsx (bilety, import; useLibraryActions = menu zarządzania + dialogi, wspólne z drzewem Requests)
     VariablesTable.tsx (maskowanie secret, odkrycie po kliknięciu)  EnvironmentEditor.tsx (widok environments, EnvironmentSelect)
-    (etap 3) LoadTestView.tsx, LoadCharts.tsx (Recharts)
+    (etap 3) LoadStats.tsx (tabela statystyk per blok + Total w dolnym panelu; bez wykresów). Requests.tsx znika: request = flow z jednym blokiem
 ```
 Stan: `useState`/`useEffect` + jeden React Context na „dane aplikacji” (lista kolekcji, environments, aktywny env, otwarty request). Edycja jak w Postmanie: zmiany lokalne z oznaczeniem „niezapisane”, zapis przyciskiem Save / Ctrl+S (`PUT`); Send wysyła bieżący stan jako `request` override. Po `run` ponowne pobranie environment/kolekcji (skrypty mogły zmienić zmienne). Bez routera; link do trwającego testu = `#/load/<id>`.
 
 ## 8. Testy
 
-- Vitest (`environment: 'node'`), testy obok kodu: `importers/postman`, `core/variables`, `core/sandbox` (pm API, eval biblioteki, jose/jsrsasign/crypto-js, timeout pętli), `core/stats` (percentyle vs. sortowanie), `core/http` i `core/run` przeciw `test/mockServer.ts`. Flow (etap 2) — sekcja 10.8.
+- Vitest (`environment: 'node'`), testy obok kodu: `importers/postman`, `core/variables`, `core/sandbox` (pm API, eval biblioteki, jose/jsrsasign/crypto-js, timeout pętli), `shared/stats` (percentyle vs. sortowanie, merge), `core/http` i `core/run` przeciw `test/mockServer.ts`. Flow (etap 2) — sekcja 10.8.
 - `mockServer.ts`: HTTP i HTTPS na porcie 0; certyfikaty serwera i klienta (mTLS) generowane w trakcie testu przez jsrsasign (`KJUR.asn1.x509.Certificate`, klucze z `crypto.generateKeyPairSync`) — żadnych PEM-ów w repo.
-- Load engine (etap 3): krótki test ~2 s na mock serwerze, sprawdza limit RPS i Stop.
+- Load (etap 3): `server/flows.test.ts` — iteracje per VU (liczniki, env bez zmian, raport), lista wywołań (liczba, filtr failed, pierścień 200, 404), Loop + Stop ≤ 2 s, 409, 400 na limity, `flow.stats` przez WS; `core/http.test.ts` — keep-alive dla http i https.
 - `samples/`: test `describe.skipIf(!existsSync('samples'))` importuje i wykonuje prawdziwy eksport lokalnie; w repo się pomija.
 - `test:dist`: uruchamia `node dist/server.cjs` z tymczasowym `DATA_DIR` i `PORT=0`, sprawdza `/api/health`, `/` (index.html) i jeden `POST /api/run` ze skryptem używającym `require('jsrsasign')`, `require('jose')` i `pm.expect` na mock serwerze — łapie błędy bundlowania, których testy na źródłach nie widzą.
 
@@ -359,18 +357,18 @@ export async function runFlow(input: FlowInput, hooks?: FlowHooks, send?: Send):
 
 ### 10.4 Styk z etapem 3 (load)
 
-Rola `load` w workerze woła **ten sam** `runFlow` bezpośrednio, bez `runPool` i bez zdarzeń per węzeł:
+Rola `load` w workerze woła **ten sam** `runFlow` bezpośrednio, bez `runPool` i bez zdarzeń per węzeł (szczegóły w sekcji 5 „Etap 3”):
 
 ```ts
 // per VU: własna kopia zmiennych, nic nie wraca do environment
-const scopes = structuredClone(baseScopes);
-while (!stopped) await runFlow({ ...input, scopes }, { signal, onNodeEnd: (n, r) => stats.record(n.id, r) }, limitedSend);
+const scopes = structuredClone(input.scopes);
+while (left-- > 0 && !signal.aborted) { scopes.runtime = {}; await runFlow({ ...input, scopes }, { signal, onNodeStart, onNodeEnd: record }, keepAliveSend); }
 ```
 
-- `limitedSend` = `execute` z `Agent({ keepAlive: true })` i token bucketem RPS przed wysłaniem. Wpinamy go przez istniejący parametr `send` (`runFlow` przekazuje go do `runRequest`).
-- `onNodeStart` i diffy nie są podpinane, więc rola `load` nie robi `structuredClone` na węzeł ani nie zapisuje plików.
-- Statystyki są „per krok” = per `nodeId`. Limit `maxNodeRuns` obowiązuje per iteracja VU.
-- Etap 3 nie zmienia silnika. Dochodzi tylko kod wokół niego (`load/engine.ts`, rola `load`, `stats.ts`).
+- `keepAliveSend` = `execute` z `agents` keep-alive, wpięty przez istniejący parametr `send` (`runFlow` przekazuje go do `runRequest`). Limit RPS odłożony.
+- `onNodeStart` tylko zapamiętuje czas startu węzła; bez diffów i zapisu plików.
+- Statystyki są „per krok” = per `nodeId`. Limit `maxNodeRuns` obowiązuje per iteracja VU (iteracja zakończona limitem liczy się jako wykonana).
+- Etap 3 nie zmienia silnika. Dochodzi tylko kod wokół niego (`loadRun.ts`, rola `load`, `shared/stats.ts`).
 
 ### 10.5 API
 
@@ -379,8 +377,8 @@ while (!stopped) await runFlow({ ...input, scopes }, { signal, onNodeEnd: (n, r)
 | `GET /api/flows` | lista `{ id, name }` |
 | `POST /api/flows` | body `Partial<Flow>` → nowy flow (bez `nodes` serwer dodaje sam węzeł Start) |
 | `GET/PUT/DELETE /api/flows/:id` | cały flow; `PUT` waliduje przez `validateFlow` (400); `DELETE` trwającego przebiegu → 409 |
-| `POST /api/flows/:id/run` | `{ environmentId?, overrides?: Record<Id, RequestItem> }` → `{ runId }`; trwa inny przebieg flow → 409 `{ runId, flowId }` |
-| `POST /api/flows/:id/cancel` | 204 (również gdy nic nie trwa) |
+| `POST /api/flows/:id/run` | `{ environmentId?, overrides?: Record<Id, RequestItem>, mode?: 'once'\|'iterations'\|'loop', iterations?, vus? }` → `{ runId }`; trwa inny przebieg flow → 409 `{ runId, flowId }`; `vus` > 200, `iterations` > 1e6 (per VU) lub `iterations × vus` > 1e7 → 400. Once + 1 VU = przebieg na żywo z zapisem zmiennych, reszta = load (ADR 0006) |
+| `POST /api/flows/:id/cancel` | 204 (również gdy nic nie trwa); dla load = Stop |
 | `GET /api/flows/:id/run` | ostatni przebieg z pamięci: `FlowRunState` albo 404 |
 
 - Przebieg czyta flow, kolekcje, environment i globals z dysku w chwili startu. GUI przed Run czeka na zakończenie zapisu flow (sekcja 10.7).
@@ -389,7 +387,8 @@ while (!stopped) await runFlow({ ...input, scopes }, { signal, onNodeEnd: (n, r)
   ```ts
   interface FlowRunState { runId: Id; flowId: Id; status: 'running' | FlowStatus | 'error'; error?: string; startedAt: string;
     currentNodeId?: Id; path: Id[];                  // kolejność wykonanych węzłów (≤ maxNodeRuns), do kolorowania kabli
-    nodes: Record<Id, { result: RunResult; outcome: Pin; runs: number }> } // tylko ostatnie wykonanie każdego węzła
+    nodes: Record<Id, { result: RunResult; outcome: Pin; runs: number }>   // tylko ostatnie wykonanie każdego węzła; puste w load
+    load?: LoadStats }                                                     // load: tryb, VU, iteracje, NodeStats per węzeł
   ```
   Pamięć ograniczają liczba węzłów × limit body 10 MB. Wynik flow usuniętego lub nadpisanego importem zostaje do restartu, co jest nieszkodliwe.
 - **Zdarzenia `/ws`** (`shared/api.ts`, `WsMessage`), wysyłane do wszystkich klientów:
@@ -397,6 +396,7 @@ while (!stopped) await runFlow({ ...input, scopes }, { signal, onNodeEnd: (n, r)
   | { type: 'flow.started'; flowId; runId }
   | { type: 'flow.node'; flowId; runId; nodeId; phase: 'start' }
   | { type: 'flow.node'; flowId; runId; nodeId; phase: 'end'; outcome: Pin; runs: number; result: RunResult }
+  | { type: 'flow.stats'; flowId; runId; load: LoadStats } // load: skumulowane statystyki co 1 s, ostatnie tuż przed flow.done
   | { type: 'flow.done'; flowId; runId; status: FlowStatus | 'error'; error?: string }
   ```
   `end` niesie pełny `RunResult`, a nie osobny typ podsumowania. Inspektor i tak go potrzebuje (`LastResult`), więc nie trzeba dodatkowego endpointu ani drugiego typu. Dane idą do tego samego, lokalnego klienta, który dostaje je przez REST w `/api/run`.

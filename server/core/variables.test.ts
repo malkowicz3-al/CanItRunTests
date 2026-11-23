@@ -45,3 +45,24 @@ test('dynamic vars fresh per occurrence', () => {
     expect(n).toBeLessThanOrEqual(1000);
   }
 });
+
+test('Postman dynamic vars formats', () => {
+  const r = (n: string) => resolve(`{{${n}}}`, scopes());
+  expect(r('$randomAlphaNumeric')).toMatch(/^[a-zA-Z0-9]$/);
+  expect(r('$randomBoolean')).toMatch(/^(true|false)$/);
+  expect(r('$randomHexColor')).toMatch(/^#[0-9a-f]{6}$/);
+  expect(r('$randomIP')).toMatch(/^(\d{1,3}\.){3}\d{1,3}$/);
+  expect(r('$randomIPV6')).toMatch(/^([0-9a-f]{4}:){7}[0-9a-f]{4}$/);
+  expect(r('$randomMACAddress')).toMatch(/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/);
+  expect(r('$randomPassword')).toMatch(/^[a-zA-Z0-9]{15}$/);
+  expect(r('$randomEmail')).toMatch(/^[\w.]+@\w+\.\w+$/);
+  expect(r('$randomExampleEmail')).toMatch(/@example\.(com|net|org)$/);
+  expect(r('$randomUrl')).toMatch(/^https:\/\/\w+\.\w+$/);
+  expect(r('$randomFullName')).toMatch(/^\w+ \w+$/);
+  expect(r('$randomLoremSentence')).toMatch(/^[A-Z][a-z ]+\.$/);
+  expect(r('$randomPrice')).toMatch(/^\d+\.\d{2}$/);
+  expect(r('$randomCountryCode')).toMatch(/^[A-Z]{2}$/);
+  expect(Date.parse(r('$randomDatePast'))).toBeLessThan(Date.now());
+  expect(Date.parse(r('$randomDateFuture'))).toBeGreaterThan(Date.now());
+  expect(r('$randomNope')).toBe('{{$randomNope}}');
+});

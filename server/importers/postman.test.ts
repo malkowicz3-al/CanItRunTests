@@ -120,3 +120,16 @@ test('keepItemIds matches same-named requests by method', () => {
   const kept = keepItemIds([req('old-get', 'GET'), req('old-post', 'POST')], [req('n1', 'POST'), req('n2', 'GET'), req('n3', 'GET')]);
   expect(kept.map((i) => i.id)).toEqual(['old-post', 'old-get', 'n3']);
 });
+
+test('url object without raw is rebuilt', () => {
+  const r = importPostman({
+    info: { schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json', name: 'c' },
+    item: [{ name: 'u', request: { method: 'GET', url: { protocol: 'https', host: ['api', 'example', 'com'], port: '8443', path: ['v1', ':id'], query: [{ key: 'a', value: '1' }, { key: 'off', value: 'x', disabled: true }, { key: 'flag' }] } } }],
+  });
+  if (r.kind !== 'collection') throw new Error('expected collection');
+  expect((r.collection.items[0] as RequestItem).url).toBe('https://api.example.com:8443/v1/:id?a=1&flag');
+  const h = importPostman({ info: { schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json', name: 'c' }, item: [{ name: 'u', request: { url: { host: '{{base}}', path: '/x' } } }] });
+  if (h.kind === 'collection') expect((h.collection.items[0] as RequestItem).url).toBe('{{base}}/x');
+  const o = importPostman({ info: { schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json', name: 'c' }, item: [{ name: 'u', request: { url: { host: 'h', path: ['v1', { type: 'string', value: ':id' }], hash: 'top' } } }] });
+  if (o.kind === 'collection') expect((o.collection.items[0] as RequestItem).url).toBe('h/v1/:id#top');
+});

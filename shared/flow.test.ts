@@ -92,3 +92,7 @@ test('nextNode undefined when pin has no cable', () => {
   expect(nextNode(f, 'a', 'fail')).toBeUndefined();
   expect(nextNode(f, 'b', 'ok')).toBeUndefined();
 });
+
+test('nodeOutcome skipped request is ok', () => {
+  expect(nodeOutcome(result(undefined, [], undefined, { code: 'ESKIPPED', message: 'x' }), [])).toBe('ok');
+});

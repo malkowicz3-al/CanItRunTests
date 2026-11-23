@@ -136,7 +136,7 @@ export function EnvironmentsView() {
   );
 }
 
-/** Active environment picker in the top bars of Requests and Flows; Manage opens the environments drawer. */
+/** Active environment picker in the Flows top bar; Manage opens the environments drawer. */
 export function EnvironmentSelect() {
   const app = useApp();
   const value = app.environments.some((e) => e.id === app.activeEnvId) ? app.activeEnvId : null;

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import type { RunResult } from '../../shared/api';
-import type { Flow } from '../../shared/model';
-import { addRequestNode, applyRunEvent, connect, fromTrack, parseStatuses, scriptVars } from './flow';
+import type { FlowRunState, LoadStats, RunResult } from '../../shared/api';
+import type { Flow, FlowEdge } from '../../shared/model';
+import { addRequestNode, applyRunEvent, connect, edgeState, freshResult, fromTrack, parseStatuses, scriptVars } from './flow';
 
 const start: Flow = { id: 'f', name: 'F', nodes: [{ id: 'start', type: 'start', position: { x: 0, y: 0 }, data: {} }], edges: [] };
 
@@ -53,4 +53,44 @@ test('applyRunEvent follows a run and ignores other runs', () => {
   expect(applyRunEvent(s, { type: 'flow.done', flowId: 'f', runId: 'other', status: 'done' })).toBe(s);
   s = applyRunEvent(s, { type: 'flow.done', flowId: 'f', runId: 'r', status: 'done' });
   expect(s).toMatchObject({ status: 'done', currentNodeId: undefined, nodes: { a: { outcome: 'ok', runs: 1 } } });
+});
+
+test('applyRunEvent takes cumulative load stats of its run only', () => {
+  const load = { mode: 'loop', vus: 2, iterationsDone: 5, failedIterations: 0, elapsedMs: 1000, nodes: { a: { count: 5, ok: 5, fail: 0, sum: 50, min: 5, max: 20, hist: {}, codes: { 200: 5 }, last: {} as RunResult } } } as LoadStats;
+  const s = applyRunEvent(null, { type: 'flow.started', flowId: 'f', runId: 'r' });
+  expect(applyRunEvent(s, { type: 'flow.stats', flowId: 'f', runId: 'other', load })).toBe(s);
+  const next = applyRunEvent(s, { type: 'flow.stats', flowId: 'f', runId: 'r', load });
+  expect(next).toMatchObject({ status: 'running', nodes: {}, load: { iterationsDone: 5, nodes: { a: { count: 5 } } } });
+  const { last: _, ...noSample } = load.nodes.a;
+  const later = applyRunEvent(next, { type: 'flow.stats', flowId: 'f', runId: 'r', load: { ...load, iterationsDone: 9, nodes: { a: noSample } } });
+  expect(later?.load?.iterationsDone).toBe(9);
+  expect(later?.load?.nodes.a.last).toBe(load.nodes.a.last); // a tick without new calls keeps the sample
+});
+
+test('freshResult: bubbles when the run counter grows, not for an old run loaded on open or a re-fetch', () => {
+  const r = {} as RunResult;
+  const seen = (count: number) => ({ result: r, count, runId: 'a' });
+  expect(freshResult(seen(1), seen(2), true, false)).toBe(true);
+  expect(freshResult(seen(1), seen(2), false, false)).toBe(true); // node end batched with flow.done
+  expect(freshResult(seen(5), { ...seen(5), result: {} as RunResult }, true, false)).toBe(false); // new sample object, no new calls (re-fetch)
+  expect(freshResult({}, seen(1), true, false)).toBe(true); // a new run
+  expect(freshResult({}, seen(1), false, false)).toBe(false); // fetched when the flow opened
+  expect(freshResult(seen(1), { ...seen(1), result: {} as RunResult }, false, true)).toBe(true); // node run alone
+  expect(freshResult(seen(1), seen(1), false, true)).toBe(false);
+  expect(freshResult({}, { count: 1, runId: 'a' }, true, false)).toBe(false);
+});
+
+test('edgeState: once follows the outcome pin, load colors cables with traffic by source health', () => {
+  const ok: FlowEdge = { id: 'a', source: 'n1', sourceHandle: 'ok', target: 'n2' };
+  const fail: FlowEdge = { id: 'b', source: 'n1', sourceHandle: 'fail', target: 'n3' };
+  const first: FlowEdge = { id: 'c', source: 'start', sourceHandle: 'ok', target: 'n1' };
+  const once: FlowRunState = { runId: 'r', flowId: 'f', status: 'done', startedAt: '', path: ['n1'], nodes: { n1: { result: {} as RunResult, outcome: 'fail', runs: 1 } } };
+  expect([ok, fail, first].map((e) => edgeState(e, once, 'start'))).toEqual([{}, { className: 'edge-stop' }, { className: 'edge-go' }]);
+  const stats = (count: number, fail: number) => ({ count, ok: count - fail, fail, sum: 0, min: 0, max: 0, hist: {}, codes: {} });
+  const load = (n1: ReturnType<typeof stats>, status: FlowRunState['status'] = 'running'): FlowRunState =>
+    ({ ...once, status, path: [], nodes: {}, load: { mode: 'loop', vus: 1, iterationsDone: 0, failedIterations: 0, elapsedMs: 0, nodes: { n1 } } });
+  expect([ok, fail, first].map((e) => edgeState(e, load(stats(3, 0)), 'start'))).toEqual([{ className: 'edge-go', animated: true }, {}, { className: 'edge-go', animated: true }]);
+  expect([ok, fail].map((e) => edgeState(e, load(stats(3, 1), 'done'), 'start'))).toEqual([{ className: 'edge-stop', animated: false }, { className: 'edge-stop', animated: false }]);
+  expect(edgeState(first, load(stats(0, 0)), 'start')).toEqual({});
+  expect(edgeState(ok, load(stats(3, 3)), 'start')).toEqual({}); // nothing passed the OK pin
 });

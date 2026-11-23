@@ -29,6 +29,12 @@ Lokalne narzędzie do testów integracyjnych i wydajnościowych mikroserwisów, 
 - Skrypty: emulacja podzbioru `pm.*` (environment/collectionVariables/globals/variables get/set, `pm.request`, `pm.response`, `pm.test`, `pm.expect`, `pm.setNextRequest`, `pm.sendRequest`), uruchamiane w `node:vm` w workerze z timeoutem (5 s). Bez twardej izolacji — skrypty traktowane jako zaufany kod.
   - Wspierany wzorzec Postmana: `eval(pm.environment.get('lib'))` (np. jsrsasign trzymany w zmiennej).
   - Dodatkowo wbudowane w sandbox: `crypto` (Node), `jose`, `jsrsasign`, `crypto-js` — pod różne podpisy (JWS, HMAC itd.).
+  - **Postman script compatibility**
+    - Supported: `pm.environment` / `collectionVariables` / `globals` (get, set, has, unset, clear, toObject, replaceIn; `pm.environment.name`), `pm.variables` (+ toObject, replaceIn), `pm.request` (headers incl. has/each, `url.getHost/getPath/getQueryString`, `body.raw/mode`), `pm.response` (code, status, reason(), headers, json/text, responseTime, responseSize, `to.have.status/header/body/jsonBody`, `to.be.ok/success/error/clientError/serverError/json/withBody`, `.not`), `pm.test`, `pm.expect`, `pm.info`, `pm.cookies` (from set-cookie), `pm.iterationData` (empty), `pm.setNextRequest`, `pm.execution.setNextRequest/skipRequest`, `pm.sendRequest`.
+    - Legacy API: `postman.set/get/clearEnvironmentVariable`, `postman.set/get/clearGlobalVariable`, `postman.setNextRequest`, `tests[...]`, `responseBody`, `responseCode`, `responseTime`, `responseHeaders`, `environment`, `globals`, `data`, `request`, `_`.
+    - `require`: `crypto`, `jose`, `jsrsasign`, `crypto-js`, `lodash`, `moment`, `uuid` (v4), `chai`, `atob`, `btoa`.
+    - Dynamic variables `{{$...}}`: guid/UUID, timestamps, randomInt and the common `$random*` set (names, emails, IPs, words, dates, ...) from small built-in lists, not faker.
+    - Not supported: `xml2js`, `cheerio`, `tv4`, `csv-parse`, `pm.vault`, `pm.visualizer`, file fields in form-data, auth types other than bearer/basic/apikey/oauth2 (token only).
 - Klucze prywatne i certyfikaty (także do mTLS) są zwykłymi zmiennymi env (jak w Postmanie). Przełącznik „ignoruj błędy TLS” per environment, opcjonalny certyfikat klienta (mTLS) ze zmiennych.
 - Zmiany zmiennych przez skrypty w pojedynczym strzale/runie zapisują się w environment.
 - Podgląd odpowiedzi: body sformatowane (JSON/XML), nagłówki, status, rozbicie czasu (DNS, TCP, TLS, TTFB, transfer), `console.log` ze skryptów, wyniki `pm.test`, **finalny wysłany request** po rozwiązaniu zmiennych i pre-scripcie.
@@ -55,6 +61,13 @@ Lokalne narzędzie do testów integracyjnych i wydajnościowych mikroserwisów, 
 - Limity w konfiguracji: domyślnie 200 VU, 2000 RPS, 30 min. Natychmiastowy Stop.
 - Jeden test wydajnościowy naraz w całej aplikacji — Start zablokowany, link do trwającego testu.
 - Raport: wykresy na żywo (RPS, latencja, błędy); po teście min/avg/p50/p90/p95/p99/max, RPS, sukcesy/błędy z podziałem na status i typ błędu (timeout, connection refused…), per krok i łącznie; do 5 próbek request/response na typ błędu; historia; eksport HTML i JSON.
+
+### Zmiana 2026-11-23 (zakres zrealizowany w etapie 3, plan `docs/plans/stage-3.md`, ADR 0006)
+- Test obciążeniowy to tryb uruchomienia flow: Once / N iteracji / Loop do Stop oraz liczba VU (1–200), environment wybrany przy Run. Once + 1 VU zapisuje zmienne jak dotąd; każdy inny tryb nie zapisuje nic.
+- Liczba iteracji jest per VU: 10 iteracji × 2 VU = 20 przebiegów flow (licznik pokazuje „x / 20”).
+- Limity: 200 VU, 1 000 000 iteracji na VU i 10 000 000 łącznie, 30 min. Stop natychmiastowy (requesty w locie przerwane).
+- Statystyki na żywo co 250 ms (próbki wyników najwyżej co 1 s) per blok i łącznie: count, ok, fail, err %, min, avg, p50, p95, max, kody statusu i błędów. Po rozwinięciu bloku: lista jego ostatnich 200 wywołań (filtr Failed: ostatnie 100 błędnych) z iteracją, VU, godziną, kodem, czasem i OK/Fail; kliknięcie pokazuje request i response (body i logi ≤ 16 KB). Lista tylko w pamięci, dla ostatniego przebiegu. Raport końcowy w `reports/<runId>.json`.
+- **Odłożone**: limit RPS i ramp-up, historia raportów i eksport HTML/JSON, do 5 próbek na typ błędu, wykresy na żywo, tryb „przez X min”, p90/p99 w GUI.
 
 ## Etap 4 — Swagger / OpenAPI
 - Swagger 2.0 i OpenAPI 3.x, z pliku lub URL.
